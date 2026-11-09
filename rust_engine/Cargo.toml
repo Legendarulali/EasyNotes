@@ -1,0 +1,32 @@
+[package]
+name = "rust_engine"
+version = "0.1.0"
+edition = "2021"
+description = "EasyNotes core engine: stroke processing, shape recognition, spatial index, paging, PDF import/export"
+
+[lib]
+# cdylib/staticlib are consumed by Flutter (cargokit); rlib lets `cargo test` link the unit tests.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.13.0"
+anyhow = "1"
+pdf-writer = "0.15"
+ttf-parser = "0.25"
+miniz_oxide = "0.8"
+# PDF import (page tree / boxes) and re-embedding imported pages as vector Form XObjects.
+lopdf = { version = "0.47", default-features = false }
+# Notebook persistence.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Web builds: lopdf's encryption support pulls in getrandom, which needs the JS backend.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+lopdf = { version = "0.47", default-features = false, features = ["wasm_js"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
