@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
@@ -26,6 +27,7 @@ enum NotebookTemplate {
 /// never has to open documents).
 class NotebookMeta {
   const NotebookMeta({
+    this.id = '',
     required this.kind,
     required this.paper,
     required this.pageCount,
@@ -33,13 +35,18 @@ class NotebookMeta {
     required this.modified,
   });
 
+  /// Stable random identifier that survives renames and moves (the Drive backup uses it
+  /// to move the cloud copy instead of uploading it again). Empty if `meta.json` is
+  /// missing or unreadable.
+  final String id;
   final DocumentKind kind;
   final PaperStyle paper;
   final int pageCount;
   final DateTime created;
   final DateTime modified;
 
-  NotebookMeta copyWith({PaperStyle? paper, int? pageCount, DateTime? modified}) => NotebookMeta(
+  NotebookMeta copyWith({String? id, PaperStyle? paper, int? pageCount, DateTime? modified}) => NotebookMeta(
+    id: id ?? this.id,
     kind: kind,
     paper: paper ?? this.paper,
     pageCount: pageCount ?? this.pageCount,
@@ -49,6 +56,7 @@ class NotebookMeta {
 
   Map<String, Object?> toJson() => {
     'version': 1,
+    if (id.isNotEmpty) 'id': id,
     'kind': kind.name,
     'paper': paper.name,
     'pages': pageCount,
@@ -60,7 +68,9 @@ class NotebookMeta {
     T byName<T extends Enum>(List<T> values, Object? name, T fallback) =>
         values.where((v) => v.name == name).firstOrNull ?? fallback;
     DateTime time(Object? v) => (v is String ? DateTime.tryParse(v)?.toLocal() : null) ?? fallbackTime;
+    final id = j['id'];
     return NotebookMeta(
+      id: id is String ? id : '',
       kind: byName(DocumentKind.values, j['kind'], DocumentKind.notebook),
       paper: byName(PaperStyle.values, j['paper'], PaperStyle.dictando),
       pageCount: (j['pages'] as num?)?.toInt() ?? 1,
@@ -68,6 +78,12 @@ class NotebookMeta {
       modified: time(j['modified']),
     );
   }
+}
+
+/// 128-bit random notebook identifier (hex).
+String newNotebookId() {
+  final r = Random.secure();
+  return [for (var i = 0; i < 16; i++) r.nextInt(256).toRadixString(16).padLeft(2, '0')].join();
 }
 
 /// A folder or a notebook in the library.
@@ -167,13 +183,22 @@ class LibraryService {
     } catch (_) {
       fallback = DateTime.now();
     }
+    Object? json;
     try {
-      final json = jsonDecode(await entry.metaFile.readAsString());
-      if (json is Map<String, Object?>) return NotebookEntry(dir, NotebookMeta.fromJson(json, fallbackTime: fallback));
+      json = jsonDecode(await entry.metaFile.readAsString());
     } catch (_) {
       // Missing / corrupt metadata: fall back to defaults, the document itself is intact.
     }
-    return NotebookEntry(dir, _defaultMeta(fallback));
+    if (json is! Map<String, Object?>) return NotebookEntry(dir, _defaultMeta(fallback));
+    final meta = NotebookMeta.fromJson(json, fallbackTime: fallback);
+    if (meta.id.isNotEmpty) return NotebookEntry(dir, meta);
+    // Notebooks from before stable ids: assign one once.
+    final withId = meta.copyWith(id: newNotebookId());
+    try {
+      return await writeMeta(NotebookEntry(dir, meta), withId);
+    } catch (_) {
+      return NotebookEntry(dir, meta);
+    }
   }
 
   static NotebookMeta _defaultMeta(DateTime t) =>
@@ -240,7 +265,7 @@ class LibraryService {
     final now = DateTime.now();
     final entry = NotebookEntry(
       dir,
-      NotebookMeta(kind: kind, paper: paper, pageCount: 1, created: now, modified: now),
+      NotebookMeta(id: newNotebookId(), kind: kind, paper: paper, pageCount: 1, created: now, modified: now),
     );
     await writeMeta(entry, entry.meta);
     return entry;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -7,6 +8,8 @@ import 'package:flutter/material.dart';
 import '../src/rust/document/page.dart';
 import '../src/rust/document/paper.dart';
 import '../src/services/library_service.dart';
+import '../src/sync/sync_service.dart';
+import '../widgets/sync_widgets.dart';
 import 'editor_screen.dart';
 
 /// Smokey grey of the home screen.
@@ -17,9 +20,10 @@ const Color _cardBorder = Color(0xFF353538);
 /// Library dashboard: folders and notebooks of the current folder, a "New" menu
 /// (Ruled / Grid notebook, Blank whiteboard, folder) and PDF import.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.library});
+  const HomeScreen({super.key, required this.library, required this.sync});
 
   final LibraryService library;
+  final SyncService sync;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -83,7 +87,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _open(NotebookEntry entry) async {
     await Navigator.of(context).push(
-      MaterialPageRoute<bool>(builder: (_) => EditorScreen(entry: entry, library: lib)),
+      MaterialPageRoute<bool>(builder: (_) => EditorScreen(entry: entry, library: lib, sync: widget.sync)),
     );
     _thumbs.remove(entry.path);
     await _refresh();
@@ -151,6 +155,12 @@ class _HomeScreenState extends State<HomeScreen> {
   // ------------------------------------------------------------------ item actions
 
   Future<void> _onItemAction(LibraryEntry entry, _ItemAction action) async {
+    await _applyItemAction(entry, action);
+    // Renames, moves and deletes reach the Drive backup right away.
+    if (action != _ItemAction.open) unawaited(widget.sync.syncNow());
+  }
+
+  Future<void> _applyItemAction(LibraryEntry entry, _ItemAction action) async {
     switch (action) {
       case _ItemAction.open:
         if (entry is NotebookEntry) {
@@ -180,9 +190,10 @@ class _HomeScreenState extends State<HomeScreen> {
           builder: (context) => AlertDialog(
             title: Text('Delete "${entry.name}"?'),
             content: Text(
-              entry is FolderEntry
-                  ? 'The folder and everything inside it will be deleted permanently.'
-                  : 'The notebook will be deleted permanently.',
+              (entry is FolderEntry
+                      ? 'The folder and everything inside it will be deleted permanently.'
+                      : 'The notebook will be deleted permanently.') +
+                  (widget.sync.isSignedIn ? '\n\nIts Google Drive backup is moved to the Drive trash.' : ''),
             ),
             actions: [
               TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
@@ -306,8 +317,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             Padding(
-              padding: const EdgeInsets.only(right: 12),
+              padding: const EdgeInsets.only(right: 8),
               child: _NewMenuButton(onSelected: _onNew, enabled: !_busy),
+            ),
+            // Google account + Drive backup status, top-right corner.
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: AccountButton(sync: widget.sync, compact: compact),
             ),
           ],
           bottom: _busy

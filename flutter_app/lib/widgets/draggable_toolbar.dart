@@ -93,6 +93,22 @@ Offset dockOffset(ToolbarPlacement placement, Size size, Size bounds, {double ma
   };
 }
 
+/// Band of the canvas covered by a toolbar of [size] at [dock], as insets from the canvas
+/// edges (dock margin + toolbar + [gap]). The canvas keeps its content out of this band at
+/// the scroll limits, so e.g. the top of page 1 rests below a top-docked toolbar.
+/// A floating toolbar can be anywhere and reserves nothing.
+EdgeInsets toolbarObstruction(ToolbarDock dock, Size size, {double margin = 12, double gap = 12}) {
+  final h = margin + size.height + gap;
+  final w = margin + size.width + gap;
+  return switch (dock) {
+    ToolbarDock.top || ToolbarDock.topLeft || ToolbarDock.topRight => EdgeInsets.only(top: h),
+    ToolbarDock.bottom || ToolbarDock.bottomLeft || ToolbarDock.bottomRight => EdgeInsets.only(bottom: h),
+    ToolbarDock.left => EdgeInsets.only(left: w),
+    ToolbarDock.right => EdgeInsets.only(right: w),
+    ToolbarDock.floating => EdgeInsets.zero,
+  };
+}
+
 /// Detachable floating toolbar: tool picker, colour palette (+ custom hex colour),
 /// thickness slider and eraser mode. Drag it by its grip anywhere over the canvas;
 /// released near an edge or corner it snaps there (vertical layout on the left / right
@@ -106,12 +122,17 @@ class DraggableToolbar extends StatefulWidget {
     required this.bounds,
     this.placement = ToolbarPlacement.initial,
     this.onPlacementChanged,
+    this.onObstructionChanged,
   });
 
   final EditorController controller;
   final Size bounds;
   final ToolbarPlacement placement;
   final ValueChanged<ToolbarPlacement>? onPlacementChanged;
+
+  /// Reports the canvas band hidden behind the docked toolbar ([toolbarObstruction])
+  /// whenever it changes (after layout, never mid-drag).
+  final ValueChanged<EdgeInsets>? onObstructionChanged;
 
   @override
   State<DraggableToolbar> createState() => _DraggableToolbarState();
@@ -131,9 +152,19 @@ class _DraggableToolbarState extends State<DraggableToolbar> {
     if (old.placement != widget.placement && _drag == null) _placement = widget.placement;
   }
 
+  EdgeInsets? _reported;
+
   void _measure() {
+    if (!mounted) return;
     final size = _panelKey.currentContext?.size;
-    if (size != null && size != _size && mounted) setState(() => _size = size);
+    if (size != null && size != _size) setState(() => _size = size);
+    if (_drag == null && size != null) {
+      final band = toolbarObstruction(_placement.dock, size);
+      if (band != _reported) {
+        _reported = band;
+        widget.onObstructionChanged?.call(band);
+      }
+    }
   }
 
   void _onDragStart(DragStartDetails d) {

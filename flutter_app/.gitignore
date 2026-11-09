@@ -46,3 +46,6 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Google OAuth client ids (see google_oauth.example.json / README)
+google_oauth.json

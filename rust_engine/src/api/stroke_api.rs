@@ -122,6 +122,27 @@ pub fn append_page() -> Option<CanvasPage> {
     engine().append_page()
 }
 
+/// Continuous scroll / writing: appends the next page when `y` (bottom of the visible
+/// area, or the pen position) is within `margin` units of the bottom of the last page.
+/// At most one page per call; `None` if not near the end (or whiteboard / page limit).
+#[frb(sync)]
+pub fn append_page_if_near_end(y: f32, margin: f32) -> Option<CanvasPage> {
+    engine().append_page_if_near_end(y, margin)
+}
+
+/// Drops trailing pages nobody wrote on (created by scrolling). Call before the final
+/// save; returns how many pages were removed.
+#[frb(sync)]
+pub fn trim_trailing_blank_pages() -> u32 {
+    engine().trim_trailing_blank_pages()
+}
+
+/// Upper bound on the number of pages of a document.
+#[frb(sync)]
+pub fn max_page_count() -> u32 {
+    crate::document::page::MAX_PAGES
+}
+
 /// Changes the paper pattern of the open document.
 #[frb(sync)]
 pub fn set_paper_style(style: PaperStyle) -> DocumentInfo {

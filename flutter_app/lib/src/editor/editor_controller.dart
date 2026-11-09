@@ -99,7 +99,7 @@ class EditorController extends ChangeNotifier {
     PencilGrain.ensureLoaded().then((_) {
       if (!_disposed) scene.markDirty();
     });
-    viewport.onReachEnd = _appendPageAtEnd;
+    viewport.onReachEnd = _appendPageNear;
   }
 
   static const Duration autosaveDelay = Duration(seconds: 2);
@@ -118,6 +118,9 @@ class EditorController extends ChangeNotifier {
 
   /// Shows a transient message (wired to a snackbar by the screen).
   void Function(String message)? onMessage;
+
+  /// Called after edits were written to disk (e.g. to mark the cloud backup as pending).
+  VoidCallback? onSaved;
 
   // Document.
   DocumentKind _kind = DocumentKind.notebook;
@@ -251,6 +254,7 @@ class EditorController extends ChangeNotifier {
           _entry,
           _entry.meta.copyWith(paper: _paperStyle, pageCount: _pages.length, modified: DateTime.now()),
         );
+        onSaved?.call();
       }
       if (thumbnail && !_disposed) {
         final png = await renderThumbnail(this);
@@ -261,8 +265,13 @@ class EditorController extends ChangeNotifier {
     }
   }
 
-  /// Final save (with thumbnail) before leaving the editor.
-  Future<void> close() => save(thumbnail: true);
+  /// Final save (with thumbnail) before leaving the editor. Blank pages that were only
+  /// created by scrolling down (nothing written on them) are dropped first, so browsing
+  /// does not leave a trail of empty pages in the notebook and its PDF export.
+  Future<void> close() {
+    if (_opened && isPaged && engine.trimTrailingBlankPages() > 0) _setPages(engine.documentPages());
+    return save(thumbnail: true);
+  }
 
   void _edited() {
     _autosave?.cancel();
@@ -292,18 +301,25 @@ class EditorController extends ChangeNotifier {
     if (isPaged && count != _pages.length) _setPages(engine.documentPages());
   }
 
-  /// Continuous scroll: swiping past the last page appends a new one beneath it.
-  void _appendPageAtEnd() {
+  /// Continuous scroll / writing: when [y] (bottom of the visible area, or the pen) gets
+  /// within [Viewport.appendMargin] of the bottom of the last page, the engine appends
+  /// page N + 1 directly beneath page N.
+  void _appendPageNear(double y) {
     if (!isPaged) return;
-    final page = engine.appendPage();
+    final page = engine.appendPageIfNearEnd(y: y, margin: Viewport.appendMargin);
     if (page == null) {
-      onMessage?.call('Page limit reached.');
+      if (!_pageLimitShown && _pages.length >= engine.maxPageCount()) {
+        _pageLimitShown = true;
+        onMessage?.call('Page limit reached.');
+      }
       return;
     }
     _setPages([..._pages, page]);
     _edited();
     notifyListeners();
   }
+
+  bool _pageLimitShown = false;
 
   // ------------------------------------------------------------------ settings
 
@@ -396,6 +412,9 @@ class EditorController extends ChangeNotifier {
       point: StrokePoint(x: world.dx, y: world.dy, pressure: pressure),
     );
     live.setPreview(engine.currentStrokePreview());
+    // Writing into the last 50 units of the last page opens the next page under the pen.
+    final end = viewport.contentHeight;
+    if (isPaged && end != null && world.dy >= end - Viewport.appendMargin) _appendPageNear(world.dy);
   }
 
   /// Commits the stroke; rectangle auto-correction happens inside this call, so the

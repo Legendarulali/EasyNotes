@@ -144,6 +144,27 @@ impl PageStack {
         added
     }
 
+    /// `true` when `y` lies within `margin` units of the bottom of the last page (or below it).
+    pub fn is_near_end(&self, y: f32, margin: f32) -> bool {
+        y.is_finite() && y >= self.total_height() - margin.clamp(0.0, PAGE_HEIGHT)
+    }
+
+    /// Removes blank pages (no PDF background) from the end of the stack while they start
+    /// at or below `content_bottom`, keeping at least `min_len` pages. Returns how many
+    /// pages were removed.
+    pub fn trim_trailing_blank(&mut self, content_bottom: f32, min_len: usize) -> usize {
+        let before = self.pages.len();
+        while self.pages.len() > min_len.max(1) {
+            match self.pages.last() {
+                Some(p) if p.pdf_page.is_none() && p.top >= content_bottom => {
+                    self.pages.pop();
+                }
+                _ => break,
+            }
+        }
+        before - self.pages.len()
+    }
+
     /// Index of the page containing `y` (clamped to the first / last page).
     pub fn page_index_at(&self, y: f32) -> Option<usize> {
         if self.pages.is_empty() {
@@ -225,6 +246,33 @@ mod tests {
         assert_eq!(s.clamp_point(1500.0, 99_999.0), (1000.0, 3000.0));
         let r = ViewportRect::new(0.0, 900.0, 10.0, 1100.0);
         assert_eq!(s.intersecting(&r).count(), 2);
+    }
+
+    #[test]
+    fn near_end_detection_uses_the_bottom_of_the_last_page() {
+        let s = PageStack::blank(2);
+        assert!(!s.is_near_end(1949.0, 50.0));
+        assert!(s.is_near_end(1950.0, 50.0));
+        assert!(s.is_near_end(2600.0, 50.0));
+        assert!(!s.is_near_end(f32::NAN, 50.0));
+    }
+
+    #[test]
+    fn trimming_keeps_written_pdf_and_first_pages() {
+        let mut s = PageStack::blank(5);
+        // Content reaches into page 2 (index 1): pages 3–5 are blank.
+        assert_eq!(s.trim_trailing_blank(1200.0, 1), 3);
+        assert_eq!(s.len(), 2);
+        // An empty notebook keeps its first page.
+        let mut empty = PageStack::blank(4);
+        assert_eq!(empty.trim_trailing_blank(0.0, 1), 3);
+        assert_eq!(empty.len(), 1);
+        // Imported PDF pages are never removed, only blank pages appended after them.
+        let mut pdf = PageStack::from_pdf_sizes(&[(595.0, 842.0), (595.0, 842.0)]);
+        pdf.append_blank();
+        pdf.append_blank();
+        assert_eq!(pdf.trim_trailing_blank(0.0, 1), 2);
+        assert_eq!(pdf.len(), 2);
     }
 
     #[test]

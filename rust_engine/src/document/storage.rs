@@ -346,8 +346,20 @@ pub fn write_atomic(path: &str, bytes: &[u8]) -> Result<()> {
     }
     let tmp = target.with_extension("tmp");
     std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, target).with_context(|| format!("replacing {path}"))?;
-    Ok(())
+    // On Windows the rename fails while another process / isolate has the old file open
+    // without delete sharing (the cloud backup reading it, an indexer, antivirus).
+    // Such locks are short-lived: retry briefly before giving up.
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(&tmp, target) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && attempt < 10 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(e) => return Err(e).with_context(|| format!("replacing {path}")),
+        }
+    }
 }
 
 #[cfg(test)]

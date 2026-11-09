@@ -1,13 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../src/canvas/note_canvas.dart';
 import '../src/canvas/painters.dart';
 import '../src/canvas/scene_cache.dart';
+import '../src/canvas/viewport.dart' as canvas;
 import '../src/editor/editor_controller.dart';
 import '../src/rust/geometry/sticky_note.dart';
 import '../src/services/library_service.dart';
 import '../src/services/pdf_export_service.dart';
+import '../src/sync/sync_service.dart';
 import '../src/ui/sticky_note_dialog.dart';
 import '../widgets/canvas_status_bar.dart';
 import '../widgets/draggable_toolbar.dart';
@@ -17,17 +21,22 @@ import '../widgets/editor_app_bar.dart';
 /// Edits autosave; leaving the screen (back button / gesture) saves and refreshes the
 /// library thumbnail first.
 class EditorScreen extends StatefulWidget {
-  const EditorScreen({super.key, required this.entry, required this.library});
+  const EditorScreen({super.key, required this.entry, required this.library, required this.sync});
 
   final NotebookEntry entry;
   final LibraryService library;
+
+  /// Cloud backup: the notebook is uploaded when the editor closes.
+  final SyncService sync;
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
 }
 
 class _EditorScreenState extends State<EditorScreen> {
-  late final EditorController c = EditorController(entry: widget.entry, library: widget.library)..onMessage = _toast;
+  late final EditorController c = EditorController(entry: widget.entry, library: widget.library)
+    ..onMessage = _toast
+    ..onSaved = widget.sync.markPending;
   late final AppLifecycleListener _lifecycle;
   ToolbarPlacement _placement = ToolbarPlacement.initial;
   bool _exporting = false;
@@ -36,7 +45,10 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void initState() {
     super.initState();
-    _lifecycle = AppLifecycleListener(onPause: _saveQuietly, onHide: _saveQuietly, onDetach: _saveQuietly);
+    // Hiding / exiting the app runs SyncService.flush(), which awaits this saver before
+    // uploading; pause / detach (mobile) save directly.
+    _lifecycle = AppLifecycleListener(onPause: _saveQuietly, onDetach: _saveQuietly);
+    widget.sync.registerSaver(this, () => c.save(thumbnail: true));
     c.open();
     widget.library.readSettings().then((s) {
       if (mounted) setState(() => _placement = ToolbarPlacement.fromJson(s));
@@ -45,6 +57,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   void dispose() {
+    widget.sync.unregisterSaver(this);
     _lifecycle.dispose();
     c.dispose();
     super.dispose();
@@ -56,8 +69,14 @@ class _EditorScreenState extends State<EditorScreen> {
     if (_leaving) return;
     _leaving = true;
     await c.close();
+    // Notebook closed: push it to Google Drive in the background.
+    unawaited(widget.sync.syncNow());
     if (mounted) Navigator.of(context).pop(true);
   }
+
+  /// The docked toolbar covers part of the canvas: keep page 1 (and the page edges) out
+  /// from under it.
+  void _onToolbarObstruction(EdgeInsets band) => c.viewport.setInsets(canvas.Viewport.insetsFor(band));
 
   void _toast(String message, {SnackBarAction? action}) {
     if (!mounted) return;
@@ -235,11 +254,12 @@ class _EditorScreenState extends State<EditorScreen> {
                       bounds: canvas,
                       placement: _placement,
                       onPlacementChanged: _onPlacementChanged,
+                      onObstructionChanged: _onToolbarObstruction,
                     ),
                   ],
                 ),
               ),
-              Positioned(left: 0, right: 0, bottom: 0, child: CanvasStatusBar(controller: c)),
+              Positioned(left: 0, right: 0, bottom: 0, child: CanvasStatusBar(controller: c, sync: widget.sync)),
             ],
           );
         },

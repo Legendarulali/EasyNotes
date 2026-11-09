@@ -4,18 +4,23 @@ import 'package:flutter/material.dart';
 
 import '../src/editor/editor_controller.dart';
 import '../src/editor/tools.dart';
+import '../src/sync/sync_service.dart';
+import 'sync_widgets.dart';
 
-/// Bottom status bar: zoom, pan coordinates (`offset_x`, `offset_y` = world point at the
-/// canvas' top-left corner), current page and a hint for the active tool.
+/// Bottom status bar: zoom, pan coordinates (`X`, `Y` = world point at the top-left of
+/// the free canvas area, `0, 0` at the top of page 1), the current page out of the page
+/// count (updates live while scrolling and as pages are appended), a hint for the active
+/// tool and the cloud backup status.
 ///
 /// Tapping it **only** resets the zoom to 100 %: the pan offsets are kept as they are
 /// ([Viewport.resetZoom]), so the view never jumps back to (0, 0).
 class CanvasStatusBar extends StatelessWidget {
-  const CanvasStatusBar({super.key, required this.controller});
+  const CanvasStatusBar({super.key, required this.controller, this.sync});
 
   static const double height = 30;
 
   final EditorController controller;
+  final SyncService? sync;
 
   @override
   Widget build(BuildContext context) {
@@ -24,15 +29,18 @@ class CanvasStatusBar extends StatelessWidget {
       fontFeatures: const [FontFeature.tabularFigures()],
     );
     final dim = text?.copyWith(color: Colors.white38);
+    final sync = this.sync;
     return ListenableBuilder(
       listenable: Listenable.merge([controller, controller.viewport]),
       builder: (context, _) {
         final vp = controller.viewport;
         final zoom = (vp.scale * 100).round();
-        final x = math.max(0, vp.scroll.dx.round());
-        final y = math.max(0, vp.scroll.dy.round());
-        final centerY = vp.scroll.dy + (vp.size.height / 2) / vp.scale;
-        final page = controller.pageIndexAt(centerY);
+        final offset = vp.offset;
+        final x = math.max(0, offset.dx.round());
+        final y = math.max(0, offset.dy.round());
+        // The page under the middle of the free area is the "current" one.
+        final middle = (vp.insets.top + (vp.size.height - vp.insets.vertical) / 2) / vp.scale + vp.scroll.dy;
+        final page = controller.pageIndexAt(middle);
         return Material(
           color: const Color(0xFF252526),
           child: InkWell(
@@ -65,6 +73,7 @@ class CanvasStatusBar extends StatelessWidget {
                           textAlign: TextAlign.right,
                         ),
                       ),
+                      if (sync != null) ...[const _Dot(), SyncStatusChip(sync: sync)],
                     ],
                   ),
                 ),

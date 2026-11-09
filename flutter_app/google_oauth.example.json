@@ -1,0 +1,6 @@
+{
+  "GOOGLE_DESKTOP_CLIENT_ID": "1234567890-xxxxxxxxxxxxxxxx.apps.googleusercontent.com",
+  "GOOGLE_DESKTOP_CLIENT_SECRET": "GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx",
+  "GOOGLE_SERVER_CLIENT_ID": "1234567890-yyyyyyyyyyyyyyyy.apps.googleusercontent.com",
+  "GOOGLE_IOS_CLIENT_ID": "1234567890-zzzzzzzzzzzzzzzz.apps.googleusercontent.com"
+}

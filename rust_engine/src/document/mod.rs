@@ -328,6 +328,35 @@ impl Engine {
         Some(page)
     }
 
+    /// Continuous scroll / writing: appends the next blank page when `y` (the bottom of the
+    /// visible area, or the pen) is within `margin` units of the end of the last page.
+    /// Appends at most one page per call; `None` when not near the end, for whiteboards
+    /// or at the page limit.
+    pub fn append_page_if_near_end(&mut self, y: f32, margin: f32) -> Option<CanvasPage> {
+        if !self.kind.is_paged() || !self.pages.is_near_end(y, margin) {
+            return None;
+        }
+        self.append_page()
+    }
+
+    /// Removes blank pages at the end of the stack that nothing was written on (pages
+    /// created by scrolling down). Imported PDF pages and the first page always stay.
+    /// Returns how many pages were removed.
+    pub fn trim_trailing_blank_pages(&mut self) -> u32 {
+        if !self.kind.is_paged() {
+            return 0;
+        }
+        // Same tolerance as `cover`: a stroke's edge grazing the next page does not keep it.
+        let bottom = self
+            .content_bounds()
+            .map_or(0.0, |b| b.bottom - PAGE_COVER_TOLERANCE);
+        let removed = self.pages.trim_trailing_blank(bottom, 1);
+        if removed > 0 {
+            self.touch();
+        }
+        removed as u32
+    }
+
     fn touch(&mut self) {
         self.revision = self.revision.wrapping_add(1);
     }
@@ -1190,6 +1219,40 @@ mod tests {
         assert_eq!(e.info().pages.len(), 4);
         // Whiteboards have no pages.
         assert!(Engine::new().append_page().is_none());
+    }
+
+    #[test]
+    fn scrolling_or_writing_near_the_bottom_appends_the_next_page() {
+        let mut e = notebook();
+        // Visible bottom still 60 units above the end of page 1: nothing happens.
+        assert!(e.append_page_if_near_end(940.0, 50.0).is_none());
+        let p = e.append_page_if_near_end(955.0, 50.0).expect("page 2");
+        assert_eq!((p.index, p.top, p.height), (1, 1000.0, 1000.0));
+        // One page per call, even when far past the end.
+        assert!(e.append_page_if_near_end(99_999.0, 50.0).is_some());
+        assert_eq!(e.page_count(), 3);
+        assert!(Engine::new().append_page_if_near_end(0.0, 50.0).is_none());
+    }
+
+    #[test]
+    fn blank_pages_created_by_scrolling_are_trimmed() {
+        let mut e = notebook();
+        for _ in 0..5 {
+            e.append_page();
+        }
+        draw_line(&mut e, 100.0, 1100.0, 300.0, 1150.0); // writes on page 2
+        let r = e.revision();
+        assert_eq!(e.trim_trailing_blank_pages(), 4);
+        assert_eq!(e.page_count(), 2);
+        assert_ne!(e.revision(), r, "trimming is a document change (saved)");
+        assert_eq!(e.trim_trailing_blank_pages(), 0);
+        // Sticky notes keep their page too.
+        let mut n = notebook();
+        n.append_page();
+        n.append_page();
+        n.create_note(50.0, 1500.0, 200.0, 150.0, 0xFFFFF59D, String::new());
+        assert_eq!(n.trim_trailing_blank_pages(), 1);
+        assert_eq!(n.page_count(), 2);
     }
 
     #[test]

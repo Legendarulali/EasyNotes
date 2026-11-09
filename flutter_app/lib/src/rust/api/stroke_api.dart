@@ -61,6 +61,23 @@ List<CanvasPage> documentPages() =>
 /// Continuous scroll: appends a blank 1000 × 1000 page below the last one.
 CanvasPage? appendPage() => RustLib.instance.api.crateApiStrokeApiAppendPage();
 
+/// Continuous scroll / writing: appends the next page when `y` (bottom of the visible
+/// area, or the pen position) is within `margin` units of the bottom of the last page.
+/// At most one page per call; `None` if not near the end (or whiteboard / page limit).
+CanvasPage? appendPageIfNearEnd({required double y, required double margin}) =>
+    RustLib.instance.api.crateApiStrokeApiAppendPageIfNearEnd(
+      y: y,
+      margin: margin,
+    );
+
+/// Drops trailing pages nobody wrote on (created by scrolling). Call before the final
+/// save; returns how many pages were removed.
+int trimTrailingBlankPages() =>
+    RustLib.instance.api.crateApiStrokeApiTrimTrailingBlankPages();
+
+/// Upper bound on the number of pages of a document.
+int maxPageCount() => RustLib.instance.api.crateApiStrokeApiMaxPageCount();
+
 /// Changes the paper pattern of the open document.
 DocumentInfo setPaperStyle({required PaperStyle style}) =>
     RustLib.instance.api.crateApiStrokeApiSetPaperStyle(style: style);
