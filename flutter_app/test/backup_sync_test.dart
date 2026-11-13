@@ -171,6 +171,9 @@ class FakeAuth implements GoogleAuth {
   Future<GoogleAccount> signIn() async => stored = account;
 
   @override
+  void cancelSignIn() {}
+
+  @override
   Future<void> signOut() async => stored = null;
 
   @override

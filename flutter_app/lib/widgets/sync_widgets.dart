@@ -96,20 +96,23 @@ class AccountButton extends StatelessWidget {
       );
       return;
     }
+    void toast(String text) => messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(behavior: SnackBarBehavior.floating, content: Text(text)));
+    // SyncService.signIn resets the phase however it ends, so the button below is
+    // back as soon as this returns or throws; this only adds the feedback.
     try {
-      final ok = await sync.signIn();
-      if (ok) {
-        messenger.showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            content: Text('Signed in as ${sync.account?.email}. Notebooks now back up to Google Drive › EasyNotes.'),
-          ),
-        );
+      if (await sync.signIn()) {
+        toast('Signed in as ${sync.account?.email}. Notebooks now back up to Google Drive › EasyNotes.');
+      } else {
+        toast('Google sign-in was cancelled.');
       }
     } catch (e) {
-      messenger.showSnackBar(SnackBar(behavior: SnackBarBehavior.floating, content: Text('Google sign-in failed: $e')));
+      toast('Google sign-in failed: ${GoogleAuth.describeError(e)}');
     }
   }
+
+  static const String _waitingHint = 'Finish signing in in your browser. Closed the Google tab? Click to cancel.';
 
   @override
   Widget build(BuildContext context) {
@@ -118,9 +121,29 @@ class AccountButton extends StatelessWidget {
       builder: (context, _) {
         final account = sync.account;
         if (sync.phase == SyncPhase.signingIn) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12),
-            child: SizedBox.square(dimension: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+          // Closing the browser tab sends nothing back; let the user end the wait.
+          if (compact) {
+            return IconButton(
+              key: const ValueKey('cancel-sign-in'),
+              tooltip: _waitingHint,
+              onPressed: sync.cancelSignIn,
+              icon: const SizedBox.square(
+                dimension: 22,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [CircularProgressIndicator(strokeWidth: 2), Icon(Icons.close, size: 12)],
+                ),
+              ),
+            );
+          }
+          return Tooltip(
+            message: _waitingHint,
+            child: OutlinedButton.icon(
+              key: const ValueKey('cancel-sign-in'),
+              onPressed: sync.cancelSignIn,
+              icon: const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+              label: const Text('Cancel sign-in'),
+            ),
           );
         }
         if (account == null) {

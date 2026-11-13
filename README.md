@@ -154,7 +154,7 @@ Without OAuth client ids the app works fully offline: the account button explain
 
 How the sign-in works on each platform:
 
-- **Windows and Linux.** `google_sign_in` has no desktop support, so the app opens the system browser and receives the redirect on a one-shot `localhost` server (state check + PKCE).
+- **Windows and Linux.** `google_sign_in` has no desktop support, so the app opens the system browser and receives the redirect on a one-shot `127.0.0.1` server (state check + PKCE). The wait always ends: pressing "Cancel" on Google's page stops it at once, the "Cancel sign-in" button stops it (for example after closing the tab, which the app cannot detect), and otherwise it gives up after 5 minutes.
 - **Where the session is kept.** The session (refresh token) is stored in the app-support folder. On Windows it is encrypted with DPAPI for the current user; on Linux it is an owner-only file.
 - **Android, iOS and macOS.** These use `google_sign_in`, which keeps the session itself.
 - **Backup bookkeeping.** The backup state lives in `Documents/EasyNotes/.backup-state.json`.

@@ -59,6 +59,7 @@ class SyncService extends ChangeNotifier {
   String? _message;
   Timer? _timer;
   Future<void>? _running;
+  Future<bool>? _signingIn;
   bool _again = false;
   bool _disposed = false;
   final Map<Object, Future<void> Function()> _savers = {};
@@ -97,22 +98,47 @@ class SyncService extends ChangeNotifier {
   }
 
   /// Interactive sign-in, then an immediate backup. Returns `false` if the user
-  /// cancelled; throws on other failures.
+  /// cancelled; throws on other failures. However it ends, the phase has left
+  /// [SyncPhase.signingIn] by the time this completes. A call while a sign-in is
+  /// already running joins it.
   Future<bool> signIn() async {
     if (!auth.isConfigured) {
       _set(SyncPhase.unavailable, message: auth.setupHint);
       throw StateError(auth.setupHint);
     }
-    _set(SyncPhase.signingIn);
+    final running = _signingIn;
+    if (running != null) return running;
+    final attempt = _signingIn = _signIn();
     try {
-      _account = await auth.signIn();
-    } on SignInCancelledException {
-      _set(SyncPhase.signedOut);
-      return false;
-    } catch (e) {
-      _set(SyncPhase.signedOut, message: '$e');
-      rethrow;
+      return await attempt;
+    } finally {
+      if (identical(_signingIn, attempt)) _signingIn = null;
     }
+  }
+
+  /// Stops waiting for the browser, e.g. after the user closed the Google tab
+  /// ([signIn] then returns `false`).
+  void cancelSignIn() {
+    if (_phase == SyncPhase.signingIn) auth.cancelSignIn();
+  }
+
+  Future<bool> _signIn() async {
+    _set(SyncPhase.signingIn);
+    GoogleAccount? account;
+    String? failure;
+    try {
+      account = await auth.signIn();
+    } on SignInCancelledException {
+      // Not an error: back to the plain "Sign in with Google" button.
+    } catch (e) {
+      failure = 'Google sign-in failed: ${GoogleAuth.describeError(e)}';
+      rethrow;
+    } finally {
+      // Always leave "signing in", so the button can never keep spinning.
+      if (account == null) _set(SyncPhase.signedOut, message: failure);
+    }
+    if (account == null || _disposed) return false;
+    _account = account;
     _set(SyncPhase.pending);
     _startTimer();
     unawaited(syncNow());
