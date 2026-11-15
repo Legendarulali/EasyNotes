@@ -50,10 +50,15 @@ class CachedStroke {
   bool get isHighlighter => render.tool == ToolType.highlighter;
 }
 
+/// Numeric part of an engine id (`s42` → 42). The engine's z-order is ascending key order
+/// (strokes and notes separately); keys are never reused.
+int engineKey(String id) => int.tryParse(id.substring(1)) ?? 0;
+
 /// Flutter-side mirror of the Rust document, kept in sync through [SceneDelta]s.
 ///
 /// Dart's default `Map` preserves insertion order, which matches the engine's z-order:
-/// new items are appended, updates of existing ids keep their position.
+/// new items are appended, updates of existing ids keep their position. Undo / redo can
+/// bring back items with older ids; [applyDelta] with `restoreOrder` re-sorts for them.
 class SceneCache extends ChangeNotifier {
   final Map<String, CachedStroke> _strokes = {};
   final Map<String, StickyNote> _notes = {};
@@ -116,19 +121,35 @@ class SceneCache extends ChangeNotifier {
     if (changed) notifyListeners();
   }
 
-  void applyDelta(SceneDelta delta) {
+  /// Patches the scene. With [restoreOrder] (undo / redo), items that reappear are put
+  /// back at their z-position instead of on top.
+  void applyDelta(SceneDelta delta, {bool restoreOrder = false}) {
     for (final id in delta.removedIds) {
       _strokes.remove(id);
       _notes.remove(id);
       _noteText.remove(id);
     }
+    var newStrokes = false, newNotes = false;
     for (final r in delta.upsertedStrokes) {
+      newStrokes |= !_strokes.containsKey(r.id);
       _strokes[r.id] = CachedStroke(r);
     }
     for (final n in delta.upsertedNotes) {
+      newNotes |= !_notes.containsKey(n.id);
       _notes[n.id] = n;
     }
+    if (restoreOrder) {
+      if (newStrokes) _sortByKey(_strokes);
+      if (newNotes) _sortByKey(_notes);
+    }
     notifyListeners();
+  }
+
+  static void _sortByKey<V>(Map<String, V> items) {
+    final sorted = items.entries.toList()..sort((a, b) => engineKey(a.key).compareTo(engineKey(b.key)));
+    items
+      ..clear()
+      ..addEntries(sorted);
   }
 
   /// Laid-out text for a note, cached until its text, font size or width changes.

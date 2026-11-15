@@ -157,6 +157,8 @@ class EditorController extends ChangeNotifier {
   List<String> _selectedIds = const [];
   Rect? _selectionBounds;
   bool _hasClipboard = false;
+  bool _canUndo = false;
+  bool _canRedo = false;
 
   // ------------------------------------------------------------------ getters
 
@@ -181,6 +183,10 @@ class EditorController extends ChangeNotifier {
   bool get hasSelection => _selectedIds.isNotEmpty;
   bool get hasClipboard => _hasClipboard;
   Color get stickyColor => _stickyColor;
+
+  /// Whether [undo] / [redo] would change the document (drives the toolbar buttons).
+  bool get canUndo => _canUndo;
+  bool get canRedo => _canRedo;
 
   /// Brush of the given tool (ink tools and eraser).
   BrushSettings brushFor(EditorTool t) => _brushes[t] ?? kDefaultBrushes[EditorTool.pen]!;
@@ -269,13 +275,57 @@ class EditorController extends ChangeNotifier {
   /// created by scrolling down (nothing written on them) are dropped first, so browsing
   /// does not leave a trail of empty pages in the notebook and its PDF export.
   Future<void> close() {
+    if (_opened) engine.endHistoryGroup();
     if (_opened && isPaged && engine.trimTrailingBlankPages() > 0) _setPages(engine.documentPages());
     return save(thumbnail: true);
   }
 
+  /// After every document change: schedule the autosave (which also marks the cloud
+  /// backup as pending once written) and refresh the undo / redo state.
   void _edited() {
     _autosave?.cancel();
     _autosave = Timer(autosaveDelay, save);
+    _refreshHistory();
+  }
+
+  void _refreshHistory() {
+    final canUndo = engine.canUndo();
+    final canRedo = engine.canRedo();
+    if (canUndo == _canUndo && canRedo == _canRedo) return;
+    _canUndo = canUndo;
+    _canRedo = canRedo;
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------ undo / redo
+
+  /// Reverts the last edit (stroke, erase, selection move / resize / duplicate / cut /
+  /// paste / delete, sticky-note change, clear). No-op when there is nothing to undo.
+  void undo() => _applyHistoryStep(_opened ? engine.undo() : null);
+
+  /// Re-applies the last undone edit.
+  void redo() => _applyHistoryStep(_opened ? engine.redo() : null);
+
+  void _applyHistoryStep(SceneDelta? delta) {
+    if (delta == null) return;
+    selectionPreview.value = null;
+    notePreview.value = null;
+    scene.applyDelta(delta, restoreOrder: true);
+    _syncPages(delta.pageCount);
+    _applySelection(delta.selection);
+    _edited();
+  }
+
+  /// Merges the following edits into one undo step until [endHistoryGroup] (gestures
+  /// made of many engine calls).
+  void beginHistoryGroup() {
+    if (_opened) engine.beginHistoryGroup();
+  }
+
+  void endHistoryGroup() {
+    if (!_opened || _disposed) return;
+    engine.endHistoryGroup();
+    _refreshHistory();
   }
 
   void _applyInfo(DocumentInfo info) {

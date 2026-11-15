@@ -151,13 +151,20 @@ fn shape_name(s: ShapeKind) -> &'static str {
         ShapeKind::Freehand => "freehand",
         ShapeKind::Rectangle => "rectangle",
         ShapeKind::Polyline => "polyline",
+        ShapeKind::Line => "line",
+        ShapeKind::Ellipse => "ellipse",
+        ShapeKind::Polygon => "polygon",
     }
 }
 
+/// Unknown names (from a newer app version) degrade to freehand ink.
 fn parse_shape(s: &str) -> ShapeKind {
     match s {
         "rectangle" => ShapeKind::Rectangle,
         "polyline" => ShapeKind::Polyline,
+        "line" => ShapeKind::Line,
+        "ellipse" => ShapeKind::Ellipse,
+        "polygon" => ShapeKind::Polygon,
         _ => ShapeKind::Freehand,
     }
 }

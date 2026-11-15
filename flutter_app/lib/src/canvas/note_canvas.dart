@@ -160,6 +160,8 @@ class _NoteCanvasState extends State<NoteCanvas> {
       case EditorTool.eraser:
         _mode = _Mode.erasing;
         _lastEraser = world;
+        // Everything one eraser drag removes or cuts is a single undo step.
+        c.beginHistoryGroup();
         c.eraseAlong(world, world);
       case EditorTool.lasso:
         _mode = _Mode.lasso;
@@ -337,6 +339,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
       case _Mode.drawing:
         c.finishStroke(_gestureTool);
       case _Mode.erasing:
+        c.endHistoryGroup();
         if (e.kind != PointerDeviceKind.mouse) c.live.setEraser(null, c.eraserRadius);
       case _Mode.lasso:
         if (_moved && c.live.lasso.length > 2) {
@@ -373,10 +376,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
           }
         }
       case _Mode.noteCreate:
-        if (!_moved) {
-          final note = c.createNote(Offset(math.max(0, world.dx - 20), math.max(0, world.dy - 20)));
-          widget.onEditNote(note, isNew: true);
-        }
+        if (!_moved) _createAndEditNote(world);
       case _Mode.navigate:
       case _Mode.idle:
         break;
@@ -391,9 +391,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
     if (!_navMoved && tap != null) {
       if (c.tool == EditorTool.stickyNote) {
         // Fingers can place notes even in stylus-only mode.
-        final w = _world(tap);
-        final note = c.createNote(Offset(math.max(0, w.dx - 20), math.max(0, w.dy - 20)));
-        widget.onEditNote(note, isNew: true);
+        _createAndEditNote(_world(tap));
       } else if (c.hasSelection) {
         // A clean single-finger tap outside the selection deselects.
         c.clearSelection();
@@ -401,6 +399,14 @@ class _NoteCanvasState extends State<NoteCanvas> {
     }
     _mode = _Mode.idle;
     _navTapStart = null;
+  }
+
+  /// Places a note at [world] and opens its editor. Placing it and the editor's outcome
+  /// (text saved, or the empty note dropped again on cancel) form one undo step.
+  void _createAndEditNote(Offset world) {
+    c.beginHistoryGroup();
+    final note = c.createNote(Offset(math.max(0, world.dx - 20), math.max(0, world.dy - 20)));
+    widget.onEditNote(note, isNew: true).whenComplete(c.endHistoryGroup);
   }
 
   void _onCancel(PointerCancelEvent e) {
@@ -417,6 +423,9 @@ class _NoteCanvasState extends State<NoteCanvas> {
     switch (_mode) {
       case _Mode.drawing:
         c.cancelStroke();
+      case _Mode.erasing:
+        // What was erased so far stays erased (and undoable as one step).
+        c.endHistoryGroup();
       case _Mode.lasso:
       case _Mode.box:
         c.live.clear();

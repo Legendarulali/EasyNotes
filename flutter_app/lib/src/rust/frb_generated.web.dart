@@ -18,6 +18,7 @@ import 'document/paper.dart';
 import 'export/pdf_exporter.dart';
 import 'frb_generated.dart';
 import 'geometry/point.dart';
+import 'geometry/shape_detector.dart';
 import 'geometry/sticky_note.dart';
 import 'geometry/stroke.dart';
 
@@ -47,6 +48,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CanvasPage dco_decode_box_autoadd_canvas_page(dynamic raw);
 
   @protected
+  DetectedShape dco_decode_box_autoadd_detected_shape(dynamic raw);
+
+  @protected
+  SceneDelta dco_decode_box_autoadd_scene_delta(dynamic raw);
+
+  @protected
   StickyNote dco_decode_box_autoadd_sticky_note(dynamic raw);
 
   @protected
@@ -66,6 +73,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CanvasPage dco_decode_canvas_page(dynamic raw);
+
+  @protected
+  DetectedShape dco_decode_detected_shape(dynamic raw);
 
   @protected
   DocumentInfo dco_decode_document_info(dynamic raw);
@@ -116,6 +126,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CanvasPage? dco_decode_opt_box_autoadd_canvas_page(dynamic raw);
 
   @protected
+  DetectedShape? dco_decode_opt_box_autoadd_detected_shape(dynamic raw);
+
+  @protected
+  SceneDelta? dco_decode_opt_box_autoadd_scene_delta(dynamic raw);
+
+  @protected
   StickyNote? dco_decode_opt_box_autoadd_sticky_note(dynamic raw);
 
   @protected
@@ -126,9 +142,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ViewportRect? dco_decode_opt_box_autoadd_viewport_rect(dynamic raw);
-
-  @protected
-  List<StrokePoint>? dco_decode_opt_list_stroke_point(dynamic raw);
 
   @protected
   PaperKind dco_decode_paper_kind(dynamic raw);
@@ -156,6 +169,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SelectionInfo dco_decode_selection_info(dynamic raw);
+
+  @protected
+  ShapeClass dco_decode_shape_class(dynamic raw);
 
   @protected
   StickyNote dco_decode_sticky_note(dynamic raw);
@@ -197,6 +213,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CanvasPage sse_decode_box_autoadd_canvas_page(SseDeserializer deserializer);
 
   @protected
+  DetectedShape sse_decode_box_autoadd_detected_shape(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SceneDelta sse_decode_box_autoadd_scene_delta(SseDeserializer deserializer);
+
+  @protected
   StickyNote sse_decode_box_autoadd_sticky_note(SseDeserializer deserializer);
 
   @protected
@@ -220,6 +244,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CanvasPage sse_decode_canvas_page(SseDeserializer deserializer);
+
+  @protected
+  DetectedShape sse_decode_detected_shape(SseDeserializer deserializer);
 
   @protected
   DocumentInfo sse_decode_document_info(SseDeserializer deserializer);
@@ -274,6 +301,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  DetectedShape? sse_decode_opt_box_autoadd_detected_shape(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SceneDelta? sse_decode_opt_box_autoadd_scene_delta(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   StickyNote? sse_decode_opt_box_autoadd_sticky_note(
     SseDeserializer deserializer,
   );
@@ -288,11 +325,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ViewportRect? sse_decode_opt_box_autoadd_viewport_rect(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  List<StrokePoint>? sse_decode_opt_list_stroke_point(
     SseDeserializer deserializer,
   );
 
@@ -322,6 +354,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SelectionInfo sse_decode_selection_info(SseDeserializer deserializer);
+
+  @protected
+  ShapeClass sse_decode_shape_class(SseDeserializer deserializer);
 
   @protected
   StickyNote sse_decode_sticky_note(SseDeserializer deserializer);
@@ -369,6 +404,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_detected_shape(
+    DetectedShape self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_scene_delta(
+    SceneDelta self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_sticky_note(
     StickyNote self,
     SseSerializer serializer,
@@ -400,6 +447,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_canvas_page(CanvasPage self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_detected_shape(DetectedShape self, SseSerializer serializer);
 
   @protected
   void sse_encode_document_info(DocumentInfo self, SseSerializer serializer);
@@ -474,6 +524,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_detected_shape(
+    DetectedShape? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_scene_delta(
+    SceneDelta? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_sticky_note(
     StickyNote? self,
     SseSerializer serializer,
@@ -491,12 +553,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_viewport_rect(
     ViewportRect? self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_opt_list_stroke_point(
-    List<StrokePoint>? self,
     SseSerializer serializer,
   );
 
@@ -529,6 +585,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_selection_info(SelectionInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_shape_class(ShapeClass self, SseSerializer serializer);
 
   @protected
   void sse_encode_sticky_note(StickyNote self, SseSerializer serializer);

@@ -113,7 +113,10 @@ class _EditorScreenState extends State<EditorScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Clear this notebook?'),
-        content: const Text('All strokes and sticky notes will be removed. Pages and imported PDF pages stay.'),
+        content: const Text(
+          'All strokes and sticky notes will be removed. Pages and imported PDF pages stay. '
+          'You can bring them back with Undo.',
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Clear')),
@@ -152,6 +155,12 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Map<ShortcutActivator, VoidCallback> get _shortcuts => {
+    // Undo / redo (holding the keys repeats them).
+    const SingleActivator(LogicalKeyboardKey.keyZ, control: true): c.undo,
+    const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): c.undo,
+    const SingleActivator(LogicalKeyboardKey.keyY, control: true): c.redo,
+    const SingleActivator(LogicalKeyboardKey.keyZ, control: true, shift: true): c.redo,
+    const SingleActivator(LogicalKeyboardKey.keyZ, meta: true, shift: true): c.redo,
     const SingleActivator(LogicalKeyboardKey.keyC, control: true): c.copySelection,
     const SingleActivator(LogicalKeyboardKey.keyC, meta: true): c.copySelection,
     const SingleActivator(LogicalKeyboardKey.keyX, control: true): c.cutSelection,

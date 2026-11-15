@@ -10,9 +10,10 @@ easynotes/
 ├── rust_engine/                    Rust crate (cdylib/staticlib, built by cargokit)
 │   └── src/
 │       ├── geometry/               point.rs, stroke.rs, outline.rs (variable-width tessellation),
-│       │                           shape_detector.rs (instant rectangle / quadrilateral snap), sticky_note.rs
+│       │                           shape_detector.rs (instant line / ellipse / polygon / star snap), sticky_note.rs
 │       ├── spatial/                quadtree.rs, hit_test.rs, transform.rs (bbox scale/drag, page clamps)
 │       ├── document/               Engine (mod.rs): strokes, notes, selection, clipboard, revisions
+│       │   ├── history.rs          undo / redo (per-item before / after snapshots)
 │       │   ├── page.rs             1000 × 1000 pages, vertical stacking, DocumentKind
 │       │   ├── eraser.rs           stroke eraser + partial ("classic") eraser that cuts strokes
 │       │   ├── pdf_importer.rs     PDF page tree → page backgrounds (lopdf)
@@ -55,11 +56,23 @@ easynotes/
 - **PDF annotation.** Imported PDFs become one page per PDF page: 1000 units wide, keeping the PDF page's aspect ratio.
   - PDFium (via `pdfrx`) renders each page as the background layer at a resolution that follows the zoom.
   - Exporting re-embeds the original pages as **vector Form XObjects** under the annotations, so text stays selectable and nothing is rasterised. MediaBox/CropBox/Rotate inheritance is handled.
-- **Instant shape snap.** On pen-up, Rust checks whether the stroke is a quadrilateral and snaps it to a sharp 90° rectangle.
-  - First an O(n) closure gate: pen-up must land near pen-down, and overshoot is trimmed.
-  - Then the loop is resampled and corners are found with a "short straw" test. Exactly 4 straight sides at about 90° are required.
-  - Sloppy trapezoids and parallelograms are squared up. Rotations under 8° become axis-aligned.
-  - It takes about 30 µs for a 600-sample stroke (release build), and an open stroke is rejected in about 6 µs.
+- **Instant shape snap** (the auto-correct toggle in the top bar). On pen-up, Rust replaces strokes that look like a shape with clean geometry:
+  - **Straight line**: an open stroke at least 48 units long whose samples all stay within 4.5 % of its length from the start–end chord. Lines within 5° of horizontal / vertical become exact.
+  - **Circle / ellipse**: the loop's area moments define the ellipse; every sample must lie close to it, the traced length must match its perimeter and there must be no sharp corner. Aspect ratios within 15 % of 1:1 make a circle.
+  - **Polygons** from Ramer–Douglas–Peucker corners, with sides that must be straight (and no straighter-than-the-corners curves):
+    - triangle: equilateral when nearly regular, otherwise the side nearest to horizontal is levelled;
+    - rectangle / square: the sharp 90° snap, sloppy quadrilaterals are squared up;
+    - trapezoid: one pair of sides parallel and the other clearly converging (made symmetric when the legs mirror each other);
+    - pentagon to octagon: crisp straight sides, a regular polygon when sides and angles are uniform;
+    - five-pointed star: a pentagram drawn in one stroke becomes a regular star.
+  - Shapes keep the drawing direction, start at the vertex nearest pen-down, and rotations under 8° become axis-aligned.
+  - Closed letters written at text size ("O", "0", "D") stay ink: circles need a 56-unit diagonal and 5+-gons 40 units. Small boxes still snap.
+  - It takes 3–16 µs for a 600-sample stroke (release build).
+- **Undo / redo.** Every edit is one step: a stroke (including a snapped shape), a whole eraser drag (both erasers), moving, resizing, duplicating, cutting, pasting or deleting a selection, creating, editing, moving or deleting a sticky note, and *Clear all*.
+  - Use the arrows next to the toolbar's grip, Ctrl+Z / Cmd+Z, and Ctrl+Y, Ctrl+Shift+Z or Cmd+Shift+Z.
+  - Restored items get their old ids and z-order back, and the QuadTree, the selection and the page stack follow every step.
+  - Undo and redo autosave like any edit, and so mark the Drive backup as pending.
+  - The history holds the last 100 steps (and at most about 64 MB) and starts empty when a notebook is opened.
 - **Two erasers.** The *Stroke eraser* deletes whole strokes on contact.
   - The *Classic eraser* cuts strokes exactly where it passes. Each stroke segment gets one exact erased interval (the distance to the eraser's swept capsule is convex), and the pieces become separate strokes.
   - The first piece keeps the original id and z-order. A cut rectangle stays one open shape with sharp corners.
@@ -92,9 +105,14 @@ easynotes/
 
 - **One tessellator.** Rust turns each stroke into world-space render geometry (`StrokeRender`), and both Flutter and the PDF exporter draw the same geometry.
   - Filled outline for pen and pencil.
-  - Centre line for the highlighter.
-  - Closed polygon for snapped rectangles.
+  - Centre line for the highlighter and for snapped straight lines.
+  - Closed polygon for snapped rectangles, polygons, stars and ellipses (fine polygons).
   - Open miter-joined polyline for cut shapes.
+- **History as item snapshots.** Each undo step stores, for every item it touched, the item's state before and after (`document/history.rs`). Undo writes the "before" states back and redo the "after" states, so all kinds of edits share one code path, and restored items get their old ids, because keys are never reused.
+  - Moves and resizes store only the stroke's transform matrices, not point copies.
+  - Gestures made of many FFI calls (an eraser drag, placing a sticky note and editing its text) are merged with `begin_history_group` / `end_history_group`. A note that is placed and then cancelled leaves no step at all.
+  - `undo()` / `redo()` return the `SceneDelta` to apply, and Flutter puts restored items back at their z-position.
+  - Pages and the paper style are not part of the history: pages appended for content stay (unused trailing pages are still trimmed on close), and a redo appends pages again if needed.
 - **Rust is authoritative for layout.** `DocumentInfo.pages` (top, height, `pdf_page`) drives the Flutter painter, the viewport extent and the PDF exporter. Paper patterns restart at each page's top, identically on screen and in the PDF.
 - **Persistence.** A notebook is a folder `Name.enote/` containing:
   - `content.ezn`: the engine document, `EZNOTE\x01\n` + zlib(JSON). Enums are stored as strings and coordinates rounded to 0.01. It is written atomically (temp file + rename).
@@ -112,7 +130,7 @@ easynotes/
 | Finger | Stylus-only on: one finger pans, two fingers pinch-zoom. Stylus-only off: one finger draws, two fingers navigate. Toggle in the top bar. |
 | Finger / pen on selection | Drag inside the box to move it, drag a corner handle to resize (Shift keeps the ratio). |
 | Mouse | Left button draws. Right/middle drag pans. Wheel scrolls (Shift = horizontal; reaching the end of the last page appends one); Ctrl+wheel zooms. Trackpad pinch zooms. |
-| Keyboard | Ctrl+C / X / V / D, Del, Esc, Ctrl+S (save), Ctrl+0 (reset zoom) |
+| Keyboard | Ctrl+Z (undo), Ctrl+Y / Ctrl+Shift+Z (redo), Ctrl+C / X / V / D, Del, Esc, Ctrl+S (save), Ctrl+0 (reset zoom); Cmd instead of Ctrl on macOS |
 
 ## Running it
 
@@ -162,7 +180,7 @@ How the sign-in works on each platform:
 Tests:
 
 ```bash
-cd rust_engine && cargo test                                  # 66 engine unit tests
+cd rust_engine && cargo test                                  # 93 engine unit tests (add --release for the timing assert)
 cd flutter_app && flutter test                                # viewport/paging (bugs A/B), library, toolbar, Drive backup + sync (fake Drive)
 cd flutter_app && flutter test integration_test -d windows    # end-to-end through the FFI bridge, incl. the editor
 ```
@@ -173,10 +191,8 @@ cd flutter_app && flutter test integration_test -d windows    # end-to-end throu
 
 This prototype does not include:
 
-- undo/redo;
 - deleting or reordering pages (other than the automatic trim of unused trailing pages);
 - password-protected PDFs;
 - keeping links/annotations of imported PDFs in the export;
-- shapes other than rectangles;
 - restoring from Drive inside the app (download the `.enote` folder instead);
 - two-way sync between devices. The backup is push-only: several devices can back up into the same `EasyNotes/` folder, but each one only uploads, moves and trashes its own notebooks.

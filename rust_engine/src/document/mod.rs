@@ -7,8 +7,15 @@
 //! Paged documents (notebooks, imported PDFs) keep every item inside the 1000-unit-wide
 //! page column and grow the [`PageStack`] at the bottom whenever content reaches past the
 //! last page. Whiteboards are unbounded towards +X / +Y.
+//!
+//! Every content edit is recorded in the [`History`] (undo / redo). Mutating methods wrap
+//! their work in `begin_edit` / `end_edit` and call `record` / `record_transform` before
+//! touching an item; [`Engine::begin_history_group`] merges the edits of a multi-call
+//! gesture (an eraser drag) into one step. Pages and the paper style are not part of the
+//! history: pages appended for content stay (unused trailing pages are trimmed on close).
 
 pub mod eraser;
+pub mod history;
 pub mod page;
 pub mod paper;
 pub mod pdf_importer;
@@ -22,12 +29,13 @@ pub use storage::DocumentData;
 
 use crate::geometry::stroke::process_input;
 use crate::geometry::{
-    detect_and_snap_rectangle, Brush, ShapeKind, StickyNote, Stroke, StrokePoint, StrokeRender,
-    ToolType, TransformMatrix, Vec2, ViewportRect,
+    detect_shape, Brush, ShapeKind, StickyNote, Stroke, StrokePoint, StrokeRender, ToolType,
+    TransformMatrix, Vec2, ViewportRect,
 };
 use crate::spatial::hit_test::{distance_to_polyline, point_in_polygon};
 use crate::spatial::{BoundsTransform, QuadTree};
 use eraser::{cut_polyline, CutOutcome, EraserSweep};
+use history::{Change, History, Item};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Offset applied to duplicated items so the copy is visibly separate.
@@ -115,6 +123,18 @@ fn decode_id(id: &str) -> Option<(ItemKind, u64)> {
     id[1..].parse().ok().map(|k| (kind, k))
 }
 
+/// Current state of `key` as a history item.
+fn item_of(
+    strokes: &BTreeMap<u64, Stroke>,
+    notes: &BTreeMap<u64, StickyNote>,
+    key: u64,
+) -> Option<Item> {
+    match strokes.get(&key) {
+        Some(s) => Some(Item::Stroke(s.clone())),
+        None => notes.get(&key).cloned().map(Item::Note),
+    }
+}
+
 /// Keeps a note inside the page column (`max_x`) when there is one.
 fn fit_note(note: StickyNote, max_x: Option<f32>) -> StickyNote {
     let mut n = note.sanitized();
@@ -142,6 +162,9 @@ pub struct Engine {
     pending: Option<PendingStroke>,
     next_key: u64,
     paste_count: u32,
+    history: History,
+    /// A history group opened by [`Engine::begin_history_group`] is pending.
+    group_open: bool,
 }
 
 impl Default for Engine {
@@ -176,6 +199,8 @@ impl Engine {
             pending: None,
             next_key: 1,
             paste_count: 0,
+            history: History::default(),
+            group_open: false,
         }
     }
 
@@ -234,14 +259,150 @@ impl Engine {
     }
 
     /// Removes every stroke and note but keeps the document type, paper, pages, the
-    /// imported PDF and the clipboard.
+    /// imported PDF and the clipboard. Undoable like any other edit.
     pub fn clear_content(&mut self) {
+        self.begin_edit();
+        let keys: Vec<u64> = self
+            .strokes
+            .keys()
+            .chain(self.notes.keys())
+            .copied()
+            .collect();
+        for key in keys {
+            self.record(key);
+        }
         self.strokes.clear();
         self.notes.clear();
         self.index.clear();
         self.selection.clear();
         self.pending = None;
+        self.end_edit();
         self.touch();
+    }
+
+    // ------------------------------------------------------------------ history
+
+    /// Opens an edit; nested calls merge into the outermost one.
+    fn begin_edit(&mut self) {
+        self.history.begin();
+    }
+
+    /// Closes an edit; the outermost close turns the recorded changes into an undo step.
+    fn end_edit(&mut self) {
+        let (strokes, notes) = (&self.strokes, &self.notes);
+        self.history.end(|key| item_of(strokes, notes, key));
+    }
+
+    /// Snapshots `key` before it is mutated (no-op outside an edit).
+    fn record(&mut self, key: u64) {
+        let (strokes, notes) = (&self.strokes, &self.notes);
+        self.history.record(key, || item_of(strokes, notes, key));
+    }
+
+    /// Merges every following edit into a single undo step until
+    /// [`Self::end_history_group`] (used for gestures made of many calls, such as an
+    /// eraser drag). An already open group is closed first; undo / redo close it too.
+    pub fn begin_history_group(&mut self) {
+        self.end_history_group();
+        self.begin_edit();
+        self.group_open = true;
+    }
+
+    /// Closes the group opened by [`Self::begin_history_group`] (no-op if none is open).
+    pub fn end_history_group(&mut self) {
+        if std::mem::take(&mut self.group_open) {
+            self.end_edit();
+        }
+    }
+
+    /// Whether [`Self::undo`] would do something (edits of a still open group count once
+    /// the group is closed).
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    /// Reverts the most recent edit. Restored items keep their ids and z-order. Returns
+    /// the scene change, or `None` when there is nothing to undo.
+    pub fn undo(&mut self) -> Option<SceneDelta> {
+        self.end_history_group();
+        let entry = self.history.pop_undo()?;
+        let delta = self.apply_changes(&entry.changes, false);
+        self.history.push_redo(entry);
+        Some(delta)
+    }
+
+    /// Re-applies the most recently undone edit; `None` when there is nothing to redo.
+    pub fn redo(&mut self) -> Option<SceneDelta> {
+        self.end_history_group();
+        let entry = self.history.pop_redo()?;
+        let delta = self.apply_changes(&entry.changes, true);
+        self.history.push_undone(entry);
+        Some(delta)
+    }
+
+    /// Writes the "after" (`forward`) or "before" states of `changes` back into the
+    /// document, keeping the QuadTree, the selection and the page stack in sync.
+    fn apply_changes(&mut self, changes: &[Change], forward: bool) -> SceneDelta {
+        let mut delta = SceneDelta::default();
+        let mut bottom: Option<f32> = None;
+        for change in changes {
+            match change {
+                Change::Item { key, before, after } => {
+                    let key = *key;
+                    let target = if forward { after } else { before };
+                    let was_stroke = self.strokes.remove(&key).is_some();
+                    let was_note = self.notes.remove(&key).is_some();
+                    self.index.remove(key);
+                    match target {
+                        None => {
+                            self.selection.remove(&key);
+                            if was_stroke {
+                                delta.removed_ids.push(encode_id(ItemKind::Stroke, key));
+                            } else if was_note {
+                                delta.removed_ids.push(encode_id(ItemKind::Note, key));
+                            }
+                        }
+                        Some(Item::Stroke(s)) => {
+                            let render = s.render();
+                            self.index.insert(key, render.bounds);
+                            bottom = Some(
+                                bottom
+                                    .map_or(render.bounds.bottom, |b| b.max(render.bounds.bottom)),
+                            );
+                            self.strokes.insert(key, s.clone());
+                            delta.upserted_strokes.push(render);
+                        }
+                        Some(Item::Note(n)) => {
+                            let rect = n.rect();
+                            self.index.insert(key, rect);
+                            bottom = Some(bottom.map_or(rect.bottom, |b| b.max(rect.bottom)));
+                            self.notes.insert(key, n.clone());
+                            delta.upserted_notes.push(n.clone());
+                        }
+                    }
+                }
+                Change::Transform { key, before, after } => {
+                    if let Some(stroke) = self.strokes.get_mut(key) {
+                        stroke.transform_matrix = if forward { *after } else { *before };
+                        let render = stroke.render();
+                        self.index.insert(*key, render.bounds);
+                        bottom = Some(
+                            bottom.map_or(render.bounds.bottom, |b| b.max(render.bounds.bottom)),
+                        );
+                        delta.upserted_strokes.push(render);
+                    }
+                }
+            }
+        }
+        if let Some(bottom) = bottom {
+            self.cover(bottom);
+        }
+        self.touch();
+        self.finish_delta(delta)
     }
 
     fn alloc_key(&mut self) -> u64 {
@@ -445,9 +606,9 @@ impl Engine {
         }
         let mut shape = ShapeKind::Freehand;
         if auto_correct {
-            if let Some(rect) = detect_and_snap_rectangle(&points) {
-                points = rect;
-                shape = ShapeKind::Rectangle;
+            if let Some(detected) = detect_shape(&points) {
+                shape = detected.kind.stroke_shape();
+                points = detected.points;
             }
         }
         let mean_pressure = points.iter().map(|p| p.pressure).sum::<f32>() / points.len() as f32;
@@ -479,19 +640,22 @@ impl Engine {
         Some(s.render())
     }
 
-    /// Commits the pending stroke. With `auto_correct`, rectangle-like loops are snapped
-    /// to a clean geometric rectangle right here, on pen-up. The eraser tool erases along
-    /// the gesture instead (stroke mode).
+    /// Commits the pending stroke. With `auto_correct`, strokes that look like a line, a
+    /// circle / ellipse, a polygon or a star are snapped to clean geometry right here, on
+    /// pen-up (see [`crate::geometry::shape_detector`]). The eraser tool erases along the
+    /// gesture instead (stroke mode, one undo step).
     pub fn finish_stroke(&mut self, tool: ToolType, auto_correct: bool) -> Option<StrokeRender> {
         let pending = self.pending.take()?;
         match tool {
             ToolType::Eraser => {
                 let radius = pending.brush.width.max(4.0) * 0.5;
                 let pts: Vec<Vec2> = pending.points.iter().map(StrokePoint::pos).collect();
+                self.begin_edit();
                 for (i, &p) in pts.iter().enumerate() {
                     let prev = if i == 0 { p } else { pts[i - 1] };
                     self.erase_along(prev, p, radius, EraserMode::Stroke);
                 }
+                self.end_edit();
                 None
             }
             ToolType::StickyNote => None,
@@ -500,8 +664,11 @@ impl Engine {
                 let key = self.alloc_key();
                 stroke.id = encode_id(ItemKind::Stroke, key);
                 let render = stroke.render();
+                self.begin_edit();
+                self.record(key);
                 self.index.insert(key, render.bounds);
                 self.strokes.insert(key, stroke);
+                self.end_edit();
                 self.cover(render.bounds.bottom);
                 self.touch();
                 Some(render)
@@ -540,12 +707,13 @@ impl Engine {
             .collect();
         keys.sort_unstable();
         let mut changed = false;
+        self.begin_edit();
         for key in keys {
             let Some(stroke) = self.strokes.get(&key) else {
                 continue;
             };
             let world = stroke.world_points();
-            let closed = stroke.shape == ShapeKind::Rectangle;
+            let closed = stroke.shape.is_closed();
             match mode {
                 EraserMode::Stroke => {
                     let pts: Vec<Vec2> = world.iter().map(StrokePoint::pos).collect();
@@ -572,14 +740,12 @@ impl Engine {
                                 points: Vec::new(),
                                 width: stroke.world_width(),
                                 transform_matrix: TransformMatrix::IDENTITY,
-                                shape: match stroke.shape {
-                                    ShapeKind::Freehand => ShapeKind::Freehand,
-                                    _ => ShapeKind::Polyline,
-                                },
+                                shape: stroke.shape.cut_piece(),
                                 ..stroke.clone()
                             };
                             for (i, points) in pieces.into_iter().enumerate() {
                                 let k = if i == 0 { key } else { self.alloc_key() };
+                                self.record(k);
                                 let piece = Stroke {
                                     id: encode_id(ItemKind::Stroke, k),
                                     points,
@@ -596,13 +762,17 @@ impl Engine {
                 }
             }
         }
+        self.end_edit();
         if changed {
             self.touch();
         }
         self.finish_delta(delta)
     }
 
+    /// Removes an item from the document, the index and the selection (recorded in the
+    /// history when called inside an edit).
     fn remove_item(&mut self, key: u64) -> bool {
+        self.record(key);
         let existed = self.strokes.remove(&key).is_some() || self.notes.remove(&key).is_some();
         if existed {
             self.index.remove(key);
@@ -636,8 +806,11 @@ impl Engine {
             },
             self.page_limit_x(),
         );
+        self.begin_edit();
+        self.record(key);
         self.index.insert(key, note.rect());
         self.notes.insert(key, note.clone());
+        self.end_edit();
         self.cover(note.rect().bottom);
         self.touch();
         note
@@ -650,8 +823,11 @@ impl Engine {
             return None;
         }
         let note = fit_note(note, self.page_limit_x());
+        self.begin_edit();
+        self.record(key);
         self.index.insert(key, note.rect());
         self.notes.insert(key, note.clone());
+        self.end_edit();
         self.cover(note.rect().bottom);
         self.touch();
         Some(note)
@@ -670,6 +846,7 @@ impl Engine {
 
     pub fn delete_items(&mut self, ids: &[String]) -> SceneDelta {
         let mut removed = Vec::new();
+        self.begin_edit();
         for id in ids {
             if let Some((_, key)) = decode_id(id) {
                 if self.remove_item(key) {
@@ -677,6 +854,7 @@ impl Engine {
                 }
             }
         }
+        self.end_edit();
         if !removed.is_empty() {
             self.touch();
         }
@@ -765,7 +943,7 @@ impl Engine {
         for key in self.index.query_point(p, tolerance.max(1.0)) {
             let hit = if let Some(stroke) = self.strokes.get(&key) {
                 let pts: Vec<Vec2> = stroke.world_points().iter().map(|q| q.pos()).collect();
-                distance_to_polyline(p, &pts, stroke.shape == ShapeKind::Rectangle)
+                distance_to_polyline(p, &pts, stroke.shape.is_closed())
                     <= tolerance + stroke.max_half_width()
             } else if let Some(note) = self.notes.get(&key) {
                 note.rect().contains(p)
@@ -819,7 +997,14 @@ impl Engine {
         let m = t.matrix();
         let mut delta = SceneDelta::default();
         let keys: Vec<u64> = self.selection.iter().copied().collect();
+        self.begin_edit();
         for key in keys {
+            if let Some(stroke) = self.strokes.get(&key) {
+                // Moves and resizes only touch the matrix: no point copy in the history.
+                self.history.record_transform(key, stroke.transform_matrix);
+            } else {
+                self.record(key);
+            }
             if let Some(stroke) = self.strokes.get_mut(&key) {
                 stroke.transform_matrix = stroke.transform_matrix.then(&m);
                 let render = stroke.render();
@@ -837,6 +1022,7 @@ impl Engine {
                 delta.upserted_notes.push(note.clone());
             }
         }
+        self.end_edit();
         self.cover(t.apply_rect(&bounds).bottom);
         self.touch();
         self.finish_delta(delta)
@@ -874,8 +1060,10 @@ impl Engine {
         let shift = TransformMatrix::translation(dx, dy);
         let mut delta = SceneDelta::default();
         let mut new_sel = BTreeSet::new();
+        self.begin_edit();
         for item in items {
             let key = self.alloc_key();
+            self.record(key);
             match item {
                 ClipItem::Stroke(s) => {
                     let mut s = s.clone();
@@ -899,6 +1087,7 @@ impl Engine {
             }
             new_sel.insert(key);
         }
+        self.end_edit();
         self.selection = new_sel;
         self.cover(bounds.bottom + dy);
         self.touch();
@@ -1301,5 +1490,284 @@ mod tests {
         // Reloading without the PDF degrades the backgrounds to blank pages.
         let back = Engine::from_data(e.data(), None);
         assert!(back.pages().iter().all(|p| p.pdf_page.is_none()));
+    }
+
+    // ------------------------------------------------------------------ undo / redo
+
+    /// Scene plus a check that the QuadTree indexes exactly the document's items with
+    /// their current bounds.
+    fn checked_scene(e: &Engine) -> SceneSnapshot {
+        assert_eq!(e.index.len(), e.item_count(), "index entries");
+        assert_eq!(e.index.node_item_count(), e.item_count(), "tree nodes");
+        for (key, s) in &e.strokes {
+            assert_eq!(e.index.bounds_of(*key), Some(s.bounds()), "stroke {key}");
+        }
+        for (key, n) in &e.notes {
+            assert_eq!(e.index.bounds_of(*key), Some(n.rect()), "note {key}");
+        }
+        e.snapshot()
+    }
+
+    fn ids(snapshot: &SceneSnapshot) -> Vec<String> {
+        snapshot
+            .strokes
+            .iter()
+            .map(|s| s.id.clone())
+            .chain(snapshot.notes.iter().map(|n| n.id.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn undo_and_redo_drawing() {
+        let mut e = notebook();
+        assert!(!e.can_undo() && !e.can_redo());
+        assert!(e.undo().is_none() && e.redo().is_none());
+        let a = draw_line(&mut e, 10.0, 10.0, 100.0, 10.0);
+        let b = draw_line(&mut e, 10.0, 60.0, 100.0, 60.0);
+        let both = checked_scene(&e);
+        assert!(e.can_undo() && !e.can_redo());
+
+        let r = e.revision();
+        let d = e.undo().unwrap();
+        assert_eq!(d.removed_ids, vec![b.id.clone()]);
+        assert_ne!(e.revision(), r, "undo is a document change (autosaved)");
+        assert_eq!(ids(&checked_scene(&e)), vec![a.id.clone()]);
+        assert!(e.can_redo());
+        // The QuadTree no longer finds the undone stroke.
+        assert!(e.select_at(50.0, 60.0, 4.0).ids.is_empty());
+
+        let d = e.redo().unwrap();
+        assert_eq!(d.upserted_strokes, vec![b.clone()], "same id and geometry");
+        assert_eq!(checked_scene(&e), both);
+        assert_eq!(e.select_at(50.0, 60.0, 4.0).ids, vec![b.id]);
+        assert!(!e.can_redo());
+
+        e.undo();
+        e.undo();
+        assert_eq!(e.item_count(), 0);
+        assert!(!e.can_undo());
+    }
+
+    #[test]
+    fn a_new_edit_clears_redo() {
+        let mut e = notebook();
+        draw_line(&mut e, 10.0, 10.0, 100.0, 10.0);
+        e.undo();
+        assert!(e.can_redo());
+        draw_line(&mut e, 10.0, 90.0, 100.0, 90.0);
+        assert!(!e.can_redo());
+        assert!(e.redo().is_none());
+        // Selection changes and failed edits do not touch the history.
+        e.select_in_rect(ViewportRect::new(0.0, 0.0, 200.0, 200.0));
+        e.erase_at(500.0, 500.0, 5.0);
+        e.undo();
+        assert!(e.can_redo());
+        e.clear_selection();
+        assert!(e.can_redo());
+    }
+
+    #[test]
+    fn undo_restores_erased_strokes_with_their_ids_and_z_order() {
+        let mut e = notebook();
+        let a = draw_line(&mut e, 10.0, 100.0, 210.0, 100.0);
+        let b = draw_line(&mut e, 10.0, 200.0, 210.0, 200.0);
+        let c = draw_line(&mut e, 10.0, 300.0, 210.0, 300.0);
+        let before = checked_scene(&e);
+
+        // Stroke eraser in the middle of the stack.
+        e.erase_at(100.0, 200.0, 5.0);
+        assert_eq!(ids(&e.snapshot()), vec![a.id.clone(), c.id.clone()]);
+        let d = e.undo().unwrap();
+        assert_eq!(d.upserted_strokes[0].id, b.id);
+        assert_eq!(checked_scene(&e), before, "back in place, between a and c");
+
+        // Classic eraser: the split pieces disappear, the original comes back.
+        let cut = e.erase_along(
+            Vec2::new(110.0, 60.0),
+            Vec2::new(110.0, 140.0),
+            6.0,
+            EraserMode::Partial,
+        );
+        assert_eq!(cut.upserted_strokes.len(), 2);
+        let after_cut = checked_scene(&e);
+        let d = e.undo().unwrap();
+        assert_eq!(d.removed_ids.len(), 1, "the extra piece");
+        assert_eq!(checked_scene(&e), before);
+        // Redo cuts again with the same ids.
+        e.redo();
+        assert_eq!(checked_scene(&e), after_cut);
+    }
+
+    #[test]
+    fn a_history_group_makes_an_eraser_drag_one_step() {
+        let mut e = notebook();
+        for y in [100.0, 150.0, 200.0, 250.0] {
+            draw_line(&mut e, 10.0, y, 300.0, y);
+        }
+        let before = checked_scene(&e);
+        e.begin_history_group();
+        for (x0, x1) in [(50.0, 50.0), (50.0, 120.0), (120.0, 200.0)] {
+            e.erase_along(
+                Vec2::new(x0, 80.0),
+                Vec2::new(x1, 270.0),
+                6.0,
+                EraserMode::Partial,
+            );
+        }
+        e.end_history_group();
+        assert!(e.item_count() > 4);
+        e.undo();
+        assert_eq!(checked_scene(&e), before);
+        assert!(e.can_undo(), "the strokes themselves are still undoable");
+        e.undo();
+        assert_eq!(e.item_count(), 3);
+
+        // Undo closes a group still open (e.g. Ctrl+Z in the middle of a drag).
+        e.redo();
+        e.begin_history_group();
+        e.erase_at(100.0, 100.0, 5.0);
+        e.undo();
+        assert_eq!(e.item_count(), 4);
+        // The pen's eraser end (finish_stroke with the eraser tool) is one step too.
+        e.begin_stroke(ToolType::Eraser, Brush::default());
+        for x in [20.0, 40.0, 60.0] {
+            e.add_point(StrokePoint::new(x, 30.0 + x * 4.0, 0.5));
+        }
+        e.finish_stroke(ToolType::Eraser, false);
+        assert!(e.item_count() < 4);
+        e.undo();
+        assert_eq!(e.item_count(), 4);
+    }
+
+    #[test]
+    fn selection_edits_are_undoable_step_by_step() {
+        let mut e = notebook();
+        draw_line(&mut e, 20.0, 20.0, 120.0, 20.0);
+        e.create_note(300.0, 300.0, 120.0, 100.0, 0xFFFFF59D, "n".into());
+        let s0 = checked_scene(&e);
+        e.select_in_rect(ViewportRect::new(0.0, 0.0, 1000.0, 1000.0));
+
+        e.transform_selection(1.5, 1.5, 40.0, 30.0);
+        let s1 = checked_scene(&e);
+        e.duplicate_selection();
+        let s2 = checked_scene(&e);
+        e.cut_selection();
+        let s3 = checked_scene(&e);
+        e.paste_clipboard(500.0, 700.0);
+        let s4 = checked_scene(&e);
+        e.delete_selection();
+        let s5 = checked_scene(&e);
+        assert_eq!(s5.strokes.len() + s5.notes.len(), 2);
+
+        for expected in [&s4, &s3, &s2, &s1, &s0] {
+            e.undo().unwrap();
+            let got = checked_scene(&e);
+            assert_eq!(got.strokes, expected.strokes);
+            assert_eq!(got.notes, expected.notes);
+        }
+        for expected in [&s1, &s2, &s3, &s4, &s5] {
+            e.redo().unwrap();
+            let got = checked_scene(&e);
+            assert_eq!(got.strokes, expected.strokes);
+            assert_eq!(got.notes, expected.notes);
+        }
+    }
+
+    #[test]
+    fn moves_are_stored_as_matrices_and_restore_exactly() {
+        let mut e = notebook();
+        let a = draw_line(&mut e, 20.0, 20.0, 120.0, 20.0);
+        e.select_in_rect(ViewportRect::new(0.0, 0.0, 200.0, 100.0));
+        for _ in 0..5 {
+            e.transform_selection(1.1, 0.9, 7.0, 3.0);
+        }
+        let step = e.history.pop_undo().unwrap();
+        assert!(matches!(step.changes[..], [Change::Transform { .. }]));
+        e.history.push_undone(step);
+        // Undoing the moves brings the stroke back exactly; the selection box follows.
+        for _ in 0..5 {
+            e.undo();
+        }
+        assert_eq!(e.snapshot().strokes, vec![a.clone()]);
+        assert_eq!(e.selection_info().bounds, Some(a.bounds));
+        e.undo();
+        e.redo();
+        assert_eq!(e.snapshot().strokes, vec![a]);
+    }
+
+    #[test]
+    fn sticky_note_edits_are_undoable() {
+        let mut e = notebook();
+        let n = e.create_note(100.0, 100.0, 150.0, 120.0, 0xFFFFF59D, String::new());
+        let mut edited = n.clone();
+        edited.text = "Salut".into();
+        e.update_note(edited.clone()).unwrap();
+        let mut moved = edited.clone();
+        moved.x = 400.0;
+        e.update_note(moved).unwrap();
+        e.delete_items(std::slice::from_ref(&n.id));
+        assert_eq!(e.item_count(), 0);
+
+        e.undo();
+        assert_eq!(e.note_at(410.0, 110.0).unwrap().text, "Salut");
+        e.undo();
+        assert_eq!(e.note_at(110.0, 110.0).unwrap(), edited);
+        e.undo();
+        assert_eq!(e.note_at(110.0, 110.0).unwrap().text, "");
+        e.undo();
+        assert_eq!(e.item_count(), 0);
+        checked_scene(&e);
+
+        // Creating a note and deleting it again in one group leaves no step at all
+        // (tapping with the note tool and cancelling the editor).
+        let mut g = notebook();
+        g.begin_history_group();
+        let n = g.create_note(10.0, 10.0, 100.0, 100.0, 0xFFFFF59D, String::new());
+        g.delete_items(&[n.id]);
+        g.end_history_group();
+        assert!(!g.can_undo());
+    }
+
+    #[test]
+    fn clearing_the_document_is_undoable() {
+        let mut e = notebook();
+        draw_line(&mut e, 20.0, 20.0, 120.0, 20.0);
+        e.create_note(300.0, 300.0, 120.0, 100.0, 0xFFFFF59D, "n".into());
+        let before = checked_scene(&e);
+        e.clear_content();
+        assert_eq!(e.item_count(), 0);
+        e.undo();
+        assert_eq!(checked_scene(&e), before);
+    }
+
+    #[test]
+    fn redo_appends_pages_for_content_below_the_last_page() {
+        let mut e = notebook();
+        draw_line(&mut e, 100.0, 1700.0, 300.0, 1700.0);
+        assert_eq!(e.page_count(), 2);
+        e.undo();
+        assert_eq!(e.trim_trailing_blank_pages(), 1);
+        let d = e.redo().unwrap();
+        assert_eq!(d.page_count, 2, "the redone stroke sits on paper again");
+    }
+
+    #[test]
+    fn the_undo_stack_is_capped() {
+        let mut e = Engine::new();
+        for i in 0..(history::HISTORY_LIMIT + 5) {
+            let y = 10.0 + i as f32 * 8.0;
+            draw_line(&mut e, 10.0, y, 60.0, y);
+        }
+        let mut undone = 0;
+        while e.undo().is_some() {
+            undone += 1;
+        }
+        assert_eq!(undone, history::HISTORY_LIMIT);
+        assert_eq!(
+            e.item_count(),
+            5,
+            "the oldest strokes can no longer be undone"
+        );
+        checked_scene(&e);
     }
 }

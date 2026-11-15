@@ -10,6 +10,7 @@ import '../document/paper.dart';
 import '../export/pdf_exporter.dart';
 import '../frb_generated.dart';
 import '../geometry/point.dart';
+import '../geometry/shape_detector.dart';
 import '../geometry/sticky_note.dart';
 import '../geometry/stroke.dart';
 
@@ -113,9 +114,11 @@ void addPoints({required List<StrokePoint> points}) =>
 StrokeRender? currentStrokePreview() =>
     RustLib.instance.api.crateApiStrokeApiCurrentStrokePreview();
 
-/// Commits the stroke in progress. With `auto_correct`, rectangle-like loops are
-/// replaced by a perfect rectangle immediately. Returns the committed render (or `None`).
-/// May append pages when the stroke reaches below the last page (see [`page_count`]).
+/// Commits the stroke in progress. With `auto_correct`, strokes that look like a line,
+/// circle / ellipse, triangle, rectangle / square, trapezoid, 5–8-gon or five-pointed
+/// star are replaced by clean geometry immediately. Returns the committed render (or
+/// `None`). May append pages when the stroke reaches below the last page (see
+/// [`page_count`]). One undo step.
 StrokeRender? finishStroke({
   required ToolType tool,
   required bool autoCorrect,
@@ -151,9 +154,31 @@ SceneDelta eraseAlong({
   mode: mode,
 );
 
-/// Stateless access to the rectangle recogniser (handy for tests and tooling).
-List<StrokePoint>? detectRectangle({required List<StrokePoint> points}) =>
-    RustLib.instance.api.crateApiStrokeApiDetectRectangle(points: points);
+/// Stateless access to the shape recogniser (handy for tests and tooling): the shape the
+/// samples would snap to on pen-up, or `None` for freehand ink.
+DetectedShape? detectShape({required List<StrokePoint> points}) =>
+    RustLib.instance.api.crateApiStrokeApiDetectShape(points: points);
+
+/// Reverts the most recent edit (stroke, erase, transform, duplicate / cut / paste /
+/// delete, sticky-note change, clear). Returns the scene change to apply, or `None` when
+/// there is nothing to undo. Restored items keep their ids and z-order.
+SceneDelta? undo() => RustLib.instance.api.crateApiStrokeApiUndo();
+
+/// Re-applies the most recently undone edit; `None` when there is nothing to redo.
+SceneDelta? redo() => RustLib.instance.api.crateApiStrokeApiRedo();
+
+bool canUndo() => RustLib.instance.api.crateApiStrokeApiCanUndo();
+
+bool canRedo() => RustLib.instance.api.crateApiStrokeApiCanRedo();
+
+/// Merges all following edits into one undo step until [`end_history_group`]: call it
+/// at the start of a gesture made of many calls (an eraser drag, creating and editing a
+/// sticky note). Undo / redo close an open group.
+void beginHistoryGroup() =>
+    RustLib.instance.api.crateApiStrokeApiBeginHistoryGroup();
+
+void endHistoryGroup() =>
+    RustLib.instance.api.crateApiStrokeApiEndHistoryGroup();
 
 /// Box selection. Returns the selected ids.
 List<String> selectInRegion({required ViewportRect rect}) =>

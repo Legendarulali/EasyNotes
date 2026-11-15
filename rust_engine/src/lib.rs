@@ -1,9 +1,10 @@
 //! EasyNotes core engine.
 //!
 //! Layout:
-//! - [`geometry`]  – points, strokes, outline tessellation, rectangle recognition, sticky notes
+//! - [`geometry`]  – points, strokes, outline tessellation, shape recognition, sticky notes
 //! - [`spatial`]   – QuadTree index, hit testing and bounding-box transforms
-//! - [`document`]  – the in-memory document / editing engine (selection, clipboard, eraser)
+//! - [`document`]  – the in-memory document / editing engine (selection, clipboard, eraser,
+//!   undo / redo history)
 //! - [`export`]    – vector PDF export
 //! - [`api`]       – the thread-safe surface exposed to Flutter through `flutter_rust_bridge`
 

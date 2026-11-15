@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_app/main.dart';
 import 'package:flutter_app/screens/editor_screen.dart';
 import 'package:flutter_app/src/canvas/note_canvas.dart';
@@ -15,6 +16,7 @@ import 'package:flutter_app/src/rust/document/page.dart';
 import 'package:flutter_app/src/rust/document/paper.dart';
 import 'package:flutter_app/src/rust/frb_generated.dart';
 import 'package:flutter_app/src/rust/geometry/point.dart';
+import 'package:flutter_app/src/rust/geometry/shape_detector.dart';
 import 'package:flutter_app/src/rust/geometry/stroke.dart';
 import 'package:flutter_app/src/services/library_service.dart';
 import 'package:flutter_app/src/sync/google_auth.dart';
@@ -42,6 +44,15 @@ StrokeRender? _drawPolyline(List<Offset> corners, {bool autoCorrect = true, int 
   return finishStroke(tool: ToolType.pen, autoCorrect: autoCorrect);
 }
 
+/// Samples along the polyline through [path] (20 per segment).
+List<StrokePoint> _samples(List<Offset> path) => [
+  for (var i = 0; i + 1 < path.length; i++)
+    for (var k = 0; k < 20; k++) _point(Offset.lerp(path[i], path[i + 1], k / 20)!),
+  _point(path.last),
+];
+
+StrokePoint _point(Offset p) => StrokePoint(x: p.dx, y: p.dy, pressure: 0.5);
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async => RustLib.init());
@@ -68,6 +79,78 @@ void main() {
   test('freehand stroke stays freehand', () {
     final r = _drawPolyline(const [Offset(10, 10), Offset(200, 60), Offset(260, 30)])!;
     expect(r.kind, RenderKind.filledOutline);
+  });
+
+  test('lines, circles, triangles and stars snap on pen-up', () {
+    final line = _drawPolyline(const [Offset(100, 300), Offset(500, 306)])!;
+    expect(line.kind, RenderKind.openPolyline);
+    expect(line.geometry, hasLength(4));
+    expect(line.geometry[1], line.geometry[3], reason: 'levelled');
+
+    List<Offset> circle(Offset c, double r) => [
+      for (var i = 0; i <= 64; i++) c + Offset.fromDirection(2 * math.pi * i / 64, r),
+    ];
+    final round = _drawPolyline(circle(const Offset(300, 600), 90), steps: 3)!;
+    expect(round.kind, RenderKind.closedPolygon);
+    expect(round.geometry.length, greaterThanOrEqualTo(64));
+
+    final triangle = detectShape(
+      points: _samples(const [Offset(100, 300), Offset(320, 306), Offset(180, 120), Offset(100, 300)]),
+    );
+    expect(triangle?.kind, ShapeClass.triangle);
+    expect(triangle!.points, hasLength(4), reason: '3 corners + closing corner');
+    final tips = [
+      for (var i = 0; i < 5; i++)
+        const Offset(400, 400) + Offset.fromDirection(-math.pi / 2 + 2 * math.pi * i / 5, 150),
+    ];
+    final star = detectShape(points: _samples([for (var i = 0; i <= 5; i++) tips[(2 * i) % 5]]));
+    expect(star?.kind, ShapeClass.star);
+    expect(detectShape(points: _samples(const [Offset(10, 10), Offset(200, 60), Offset(260, 30)])), isNull);
+  });
+
+  test('undo / redo through the bridge keep ids, z-order and the spatial index', () {
+    expect(canUndo(), isFalse);
+    expect(undo(), isNull);
+    final a = _drawPolyline(const [Offset(20, 100), Offset(400, 100)], autoCorrect: false)!;
+    final b = _drawPolyline(const [Offset(20, 200), Offset(400, 200)], autoCorrect: false)!;
+    final r0 = documentRevision();
+
+    // Erase `a` with one eraser drag (several calls, one undo step).
+    beginHistoryGroup();
+    eraseAlong(x0: 100, y0: 60, x1: 100, y1: 100, radius: 6, mode: EraserMode.partial);
+    eraseAlong(x0: 100, y0: 100, x1: 300, y1: 140, radius: 6, mode: EraserMode.partial);
+    endHistoryGroup();
+    expect(getScene().strokes.length, greaterThan(2));
+
+    final restored = undo()!;
+    expect(documentRevision(), isNot(r0));
+    expect(getScene().strokes.map((s) => s.id), [a.id, b.id], reason: 'a is back below b');
+    expect(restored.upsertedStrokes.map((s) => s.id), contains(a.id));
+    expect(selectAt(x: 50, y: 100, tolerance: 4), [a.id], reason: 'hit-testing finds it again');
+    expect(canRedo(), isTrue);
+
+    redo();
+    expect(getScene().strokes.length, greaterThan(2));
+    undo();
+    undo(); // b
+    expect(getScene().strokes.map((s) => s.id), [a.id]);
+    // A new edit drops the redo history.
+    _drawPolyline(const [Offset(20, 300), Offset(400, 300)], autoCorrect: false);
+    expect(canRedo(), isFalse);
+
+    // Selection edits and notes.
+    final n = createStickyNote(x: 500, y: 500, width: 160, height: 120, color: 0xFFFFF59D, text: 'x');
+    selectInRegion(rect: const ViewportRect(left: 0, top: 0, right: 1000, bottom: 1000));
+    transformSelection(scaleX: 1, scaleY: 1, dx: 40, dy: 40);
+    deleteSelection();
+    expect(getScene().strokes, isEmpty);
+    undo();
+    undo();
+    expect(getScene().notes.single.x, n.x);
+    resetDocument();
+    expect(getScene().strokes, isEmpty);
+    undo();
+    expect(getScene().strokes, hasLength(2), reason: 'clearing is undoable');
   });
 
   test('notebooks start with one 1000 × 1000 page and grow downwards', () {
@@ -257,6 +340,96 @@ void main() {
     c.finishStroke(EditorTool.pen);
     await tester.pump();
     expect(find.text('Page 1 / 2'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    sync.dispose();
+    await dir.delete(recursive: true);
+  });
+
+  testWidgets('editor: undo / redo from the toolbar and the keyboard; both autosave', (tester) async {
+    final dir = await Directory.systemTemp.createTemp('easynotes_undo');
+    final lib = LibraryService(dir);
+    final sync = SyncService(library: lib, auth: GoogleAuth.forPlatform());
+    final entry = await lib.createNotebook(dir, 'Undo test', NotebookTemplate.ruled);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildEasyNotesTheme(),
+        home: EditorScreen(entry: entry, library: lib, sync: sync),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final c = tester.widget<CanvasStatusBar>(find.byType(CanvasStatusBar)).controller;
+    // Saves are what marks the Drive backup as pending (EditorScreen wires onSaved).
+    var saves = 0;
+    final markPending = c.onSaved;
+    c.onSaved = () {
+      saves++;
+      markPending?.call();
+    };
+    InkWell chip(String tooltip) =>
+        tester.widget<InkWell>(find.descendant(of: find.byTooltip(tooltip), matching: find.byType(InkWell)));
+    Future<void> keys(List<LogicalKeyboardKey> modifiers, LogicalKeyboardKey key) async {
+      for (final m in modifiers) {
+        await tester.sendKeyDownEvent(m);
+      }
+      await tester.sendKeyEvent(key);
+      for (final m in modifiers.reversed) {
+        await tester.sendKeyUpEvent(m);
+      }
+      await tester.pump();
+    }
+
+    expect(chip('Undo (Ctrl+Z)').onTap, isNull);
+    expect(chip('Redo (Ctrl+Y)').onTap, isNull);
+
+    c.beginStroke(EditorTool.pen, const Offset(100, 200), 0.5);
+    for (var i = 1; i <= 20; i++) {
+      c.addPoint(Offset(100 + i * 10, 200 + math.sin(i.toDouble()) * 30), 0.5);
+    }
+    c.finishStroke(EditorTool.pen);
+    await tester.pump();
+    expect(c.scene.strokeCount, 1);
+    expect(chip('Undo (Ctrl+Z)').onTap, isNotNull, reason: 'enabled once there is history');
+    expect(chip('Redo (Ctrl+Y)').onTap, isNull);
+    await c.save();
+    expect(saves, 1);
+
+    await keys([LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyZ);
+    expect(c.scene.strokeCount, 0);
+    expect(chip('Redo (Ctrl+Y)').onTap, isNotNull);
+    expect(chip('Undo (Ctrl+Z)').onTap, isNull);
+    await c.save();
+    expect(saves, 2, reason: 'undo changed the document: saved and marked for backup');
+
+    await keys([LogicalKeyboardKey.controlLeft, LogicalKeyboardKey.shiftLeft], LogicalKeyboardKey.keyZ);
+    expect(c.scene.strokeCount, 1);
+    await tester.tap(find.byTooltip('Undo (Ctrl+Z)'));
+    await tester.pump();
+    expect(c.scene.strokeCount, 0);
+    await keys([LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyY);
+    expect(c.scene.strokeCount, 1);
+    await tester.tap(find.byTooltip('Undo (Ctrl+Z)'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Redo (Ctrl+Y)'));
+    await tester.pump();
+    expect(c.scene.strokeCount, 1);
+    await c.save();
+    expect(saves, 3);
+
+    // One eraser drag across the canvas is one undo step.
+    c.selectTool(EditorTool.eraser);
+    await tester.pump();
+    final canvas = tester.getRect(find.byType(NoteCanvas));
+    Offset screen(Offset world) => canvas.topLeft + c.viewport.worldToScreen(world);
+    final drag = await tester.startGesture(screen(const Offset(150, 120)), kind: PointerDeviceKind.stylus);
+    for (var i = 1; i <= 10; i++) {
+      await drag.moveTo(screen(Offset(150 + i * 2.0, 120 + i * 18.0)));
+    }
+    await drag.up();
+    await tester.pump();
+    expect(c.scene.strokeCount, isNot(1), reason: 'the classic eraser cut the stroke');
+    await keys([LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyZ);
+    expect(c.scene.strokeCount, 1);
 
     await tester.pumpWidget(const SizedBox());
     sync.dispose();

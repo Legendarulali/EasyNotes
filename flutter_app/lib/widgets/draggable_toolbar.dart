@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../src/editor/editor_controller.dart';
@@ -340,6 +341,19 @@ class _ToolbarPanel extends StatelessWidget {
                   ),
                 ),
               ),
+              if (!collapsed) ...[
+                _IconChip(
+                  icon: Icons.undo,
+                  tooltip: 'Undo (${_shortcut('Z')})',
+                  onTap: controller.canUndo ? controller.undo : null,
+                ),
+                _IconChip(
+                  icon: Icons.redo,
+                  tooltip: 'Redo (${_isApple ? '⇧⌘Z' : 'Ctrl+Y'})',
+                  onTap: controller.canRedo ? controller.redo : null,
+                ),
+                _Separator(axis: axis),
+              ],
               if (collapsed)
                 _ToolButton(
                   tool: controller.tool,
@@ -380,6 +394,11 @@ class _ToolbarPanel extends StatelessWidget {
       ),
     );
   }
+
+  static bool get _isApple =>
+      defaultTargetPlatform == TargetPlatform.macOS || defaultTargetPlatform == TargetPlatform.iOS;
+
+  static String _shortcut(String key) => _isApple ? '⌘$key' : 'Ctrl+$key';
 
   List<Widget> _optionsFor(BuildContext context, bool vertical) {
     final tool = controller.tool;
@@ -478,17 +497,23 @@ class _ToolButton extends StatelessWidget {
   }
 }
 
+/// Small icon button; dimmed and inert when [onTap] is `null`.
 class _IconChip extends StatelessWidget {
   const _IconChip({required this.icon, required this.tooltip, required this.onTap, this.selected = false});
 
   final IconData icon;
   final String tooltip;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final bool selected;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final color = onTap == null
+        ? Colors.white24
+        : selected
+        ? scheme.primary
+        : Colors.white60;
     return Padding(
       padding: const EdgeInsets.all(2),
       child: Tooltip(
@@ -503,7 +528,7 @@ class _IconChip extends StatelessWidget {
               color: selected ? scheme.primary.withValues(alpha: 0.22) : Colors.transparent,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, size: 20, color: selected ? scheme.primary : Colors.white60),
+            child: Icon(icon, size: 20, color: color),
           ),
         ),
       ),

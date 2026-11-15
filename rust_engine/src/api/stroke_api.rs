@@ -11,8 +11,7 @@ use crate::document::{
 };
 use crate::export::{self, ExportDocument, PdfExportReport};
 use crate::geometry::{
-    detect_and_snap_rectangle, Brush, StickyNote, StrokePoint, StrokeRender, ToolType, Vec2,
-    ViewportRect,
+    Brush, DetectedShape, StickyNote, StrokePoint, StrokeRender, ToolType, Vec2, ViewportRect,
 };
 use anyhow::Context;
 use flutter_rust_bridge::frb;
@@ -205,9 +204,11 @@ pub fn current_stroke_preview() -> Option<StrokeRender> {
     engine().preview()
 }
 
-/// Commits the stroke in progress. With `auto_correct`, rectangle-like loops are
-/// replaced by a perfect rectangle immediately. Returns the committed render (or `None`).
-/// May append pages when the stroke reaches below the last page (see [`page_count`]).
+/// Commits the stroke in progress. With `auto_correct`, strokes that look like a line,
+/// circle / ellipse, triangle, rectangle / square, trapezoid, 5–8-gon or five-pointed
+/// star are replaced by clean geometry immediately. Returns the committed render (or
+/// `None`). May append pages when the stroke reaches below the last page (see
+/// [`page_count`]). One undo step.
 #[frb(sync)]
 pub fn finish_stroke(tool: ToolType, auto_correct: bool) -> Option<StrokeRender> {
     engine().finish_stroke(tool, auto_correct)
@@ -238,10 +239,50 @@ pub fn erase_along(
     engine().erase_along(Vec2::new(x0, y0), Vec2::new(x1, y1), radius, mode)
 }
 
-/// Stateless access to the rectangle recogniser (handy for tests and tooling).
+/// Stateless access to the shape recogniser (handy for tests and tooling): the shape the
+/// samples would snap to on pen-up, or `None` for freehand ink.
 #[frb(sync)]
-pub fn detect_rectangle(points: Vec<StrokePoint>) -> Option<Vec<StrokePoint>> {
-    detect_and_snap_rectangle(&points)
+pub fn detect_shape(points: Vec<StrokePoint>) -> Option<DetectedShape> {
+    crate::geometry::detect_shape(&points)
+}
+
+// ============================================================================ history
+
+/// Reverts the most recent edit (stroke, erase, transform, duplicate / cut / paste /
+/// delete, sticky-note change, clear). Returns the scene change to apply, or `None` when
+/// there is nothing to undo. Restored items keep their ids and z-order.
+#[frb(sync)]
+pub fn undo() -> Option<SceneDelta> {
+    engine().undo()
+}
+
+/// Re-applies the most recently undone edit; `None` when there is nothing to redo.
+#[frb(sync)]
+pub fn redo() -> Option<SceneDelta> {
+    engine().redo()
+}
+
+#[frb(sync)]
+pub fn can_undo() -> bool {
+    engine().can_undo()
+}
+
+#[frb(sync)]
+pub fn can_redo() -> bool {
+    engine().can_redo()
+}
+
+/// Merges all following edits into one undo step until [`end_history_group`]: call it
+/// at the start of a gesture made of many calls (an eraser drag, creating and editing a
+/// sticky note). Undo / redo close an open group.
+#[frb(sync)]
+pub fn begin_history_group() {
+    engine().begin_history_group();
+}
+
+#[frb(sync)]
+pub fn end_history_group() {
+    engine().end_history_group();
 }
 
 // ============================================================================ selection

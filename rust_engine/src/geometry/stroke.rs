@@ -79,11 +79,38 @@ impl Default for Brush {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShapeKind {
     Freehand,
-    /// Auto-corrected rectangle: points are the 4 corners plus the closing corner.
+    /// Auto-corrected rectangle / square: points are the 4 corners plus the closing corner.
     Rectangle,
     /// Open piece of a geometric shape (e.g. a rectangle cut by the partial eraser):
     /// straight segments drawn with constant width and sharp (miter) corners.
     Polyline,
+    /// Auto-corrected straight line: exactly two points, constant width.
+    Line,
+    /// Auto-corrected circle / ellipse: a fine closed polygon (closing point repeated).
+    Ellipse,
+    /// Auto-corrected triangle, trapezoid, 4–8-gon or star: the vertices plus the closing
+    /// vertex (a star's vertices are its tips in drawing order, so the outline crosses
+    /// itself).
+    Polygon,
+}
+
+impl ShapeKind {
+    /// Closed outlines (the last point connects back to the first).
+    pub fn is_closed(self) -> bool {
+        matches!(
+            self,
+            ShapeKind::Rectangle | ShapeKind::Ellipse | ShapeKind::Polygon
+        )
+    }
+
+    /// Kind of the pieces left when the partial eraser cuts a stroke of this kind.
+    pub fn cut_piece(self) -> ShapeKind {
+        match self {
+            ShapeKind::Freehand => ShapeKind::Freehand,
+            ShapeKind::Line => ShapeKind::Line,
+            _ => ShapeKind::Polyline,
+        }
+    }
 }
 
 /// 2D affine transform. `x' = a·x + c·y + tx`, `y' = b·x + d·y + ty`.
@@ -260,9 +287,12 @@ impl Stroke {
 
     pub fn render_kind(&self) -> RenderKind {
         match (self.shape, self.tool_type) {
-            (ShapeKind::Rectangle, _) => RenderKind::ClosedPolygon,
+            (ShapeKind::Rectangle | ShapeKind::Ellipse | ShapeKind::Polygon, _) => {
+                RenderKind::ClosedPolygon
+            }
             (ShapeKind::Polyline, _) => RenderKind::OpenShape,
-            (_, ToolType::Highlighter) => RenderKind::OpenPolyline,
+            // Constant width with square caps, like a ruled pen line.
+            (ShapeKind::Line, _) | (_, ToolType::Highlighter) => RenderKind::OpenPolyline,
             _ => RenderKind::FilledOutline,
         }
     }
@@ -419,10 +449,18 @@ mod tests {
             RenderKind::OpenPolyline
         );
         let mut s = stroke(pts, ToolType::Pencil);
-        s.shape = ShapeKind::Rectangle;
-        assert_eq!(s.render().kind, RenderKind::ClosedPolygon);
+        for closed in [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::Polygon] {
+            s.shape = closed;
+            assert_eq!(s.render().kind, RenderKind::ClosedPolygon);
+            assert!(closed.is_closed());
+            assert_eq!(closed.cut_piece(), ShapeKind::Polyline);
+        }
         s.shape = ShapeKind::Polyline;
         assert_eq!(s.render().kind, RenderKind::OpenShape);
+        s.shape = ShapeKind::Line;
+        assert_eq!(s.render().kind, RenderKind::OpenPolyline);
+        assert_eq!(ShapeKind::Line.cut_piece(), ShapeKind::Line);
+        assert!(!ShapeKind::Line.is_closed());
     }
 
     #[test]

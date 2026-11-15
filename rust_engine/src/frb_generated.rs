@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 251676603;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1125235197;
 
 // Section: executor
 
@@ -174,6 +174,37 @@ fn wire__crate__api__stroke_api__append_page_if_near_end_impl(
         },
     )
 }
+fn wire__crate__api__stroke_api__begin_history_group_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "begin_history_group",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>({
+                    crate::api::stroke_api::begin_history_group();
+                })?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__stroke_api__begin_stroke_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -202,6 +233,64 @@ fn wire__crate__api__stroke_api__begin_stroke_impl(
                 let output_ok = Ok::<_, ()>({
                     crate::api::stroke_api::begin_stroke(api_tool, api_brush);
                 })?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__stroke_api__can_redo_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "can_redo",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::stroke_api::can_redo())?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__stroke_api__can_undo_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "can_undo",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::stroke_api::can_undo())?;
                 std::result::Result::Ok(output_ok)
             })())
         },
@@ -481,14 +570,14 @@ fn wire__crate__api__stroke_api__delete_selection_impl(
         },
     )
 }
-fn wire__crate__api__stroke_api__detect_rectangle_impl(
+fn wire__crate__api__stroke_api__detect_shape_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "detect_rectangle",
+            debug_name: "detect_shape",
             port: None,
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
         },
@@ -506,7 +595,7 @@ fn wire__crate__api__stroke_api__detect_rectangle_impl(
                 <Vec<crate::geometry::point::StrokePoint>>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
-                let output_ok = Ok::<_, ()>(crate::api::stroke_api::detect_rectangle(api_points))?;
+                let output_ok = Ok::<_, ()>(crate::api::stroke_api::detect_shape(api_points))?;
                 std::result::Result::Ok(output_ok)
             })())
         },
@@ -623,6 +712,37 @@ fn wire__crate__api__stroke_api__duplicate_selection_impl(
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
                 let output_ok = Ok::<_, ()>(crate::api::stroke_api::duplicate_selection())?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__stroke_api__end_history_group_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "end_history_group",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>({
+                    crate::api::stroke_api::end_history_group();
+                })?;
                 std::result::Result::Ok(output_ok)
             })())
         },
@@ -1148,6 +1268,35 @@ fn wire__crate__api__stroke_api__paste_clipboard_impl(
         },
     )
 }
+fn wire__crate__api__stroke_api__redo_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "redo",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::stroke_api::redo())?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__stroke_api__reset_document_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1499,6 +1648,35 @@ fn wire__crate__api__stroke_api__trim_trailing_blank_pages_impl(
         },
     )
 }
+fn wire__crate__api__stroke_api__undo_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "undo",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::stroke_api::undo())?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__stroke_api__update_sticky_note_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1584,6 +1762,18 @@ impl SseDecode for crate::document::page::CanvasPage {
             width: var_width,
             height: var_height,
             pdf_page: var_pdfPage,
+        };
+    }
+}
+
+impl SseDecode for crate::geometry::shape_detector::DetectedShape {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_kind = <crate::geometry::shape_detector::ShapeClass>::sse_decode(deserializer);
+        let mut var_points = <Vec<crate::geometry::point::StrokePoint>>::sse_decode(deserializer);
+        return crate::geometry::shape_detector::DetectedShape {
+            kind: var_kind,
+            points: var_points,
         };
     }
 }
@@ -1765,6 +1955,30 @@ impl SseDecode for Option<crate::document::page::CanvasPage> {
     }
 }
 
+impl SseDecode for Option<crate::geometry::shape_detector::DetectedShape> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(
+                <crate::geometry::shape_detector::DetectedShape>::sse_decode(deserializer),
+            );
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::document::SceneDelta> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::document::SceneDelta>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::geometry::sticky_note::StickyNote> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1807,19 +2021,6 @@ impl SseDecode for Option<crate::geometry::point::ViewportRect> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<crate::geometry::point::ViewportRect>::sse_decode(
-                deserializer,
-            ));
-        } else {
-            return None;
-        }
-    }
-}
-
-impl SseDecode for Option<Vec<crate::geometry::point::StrokePoint>> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        if (<bool>::sse_decode(deserializer)) {
-            return Some(<Vec<crate::geometry::point::StrokePoint>>::sse_decode(
                 deserializer,
             ));
         } else {
@@ -1973,6 +2174,29 @@ impl SseDecode for crate::document::SelectionInfo {
     }
 }
 
+impl SseDecode for crate::geometry::shape_detector::ShapeClass {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::geometry::shape_detector::ShapeClass::Line,
+            1 => crate::geometry::shape_detector::ShapeClass::Circle,
+            2 => crate::geometry::shape_detector::ShapeClass::Ellipse,
+            3 => crate::geometry::shape_detector::ShapeClass::Triangle,
+            4 => crate::geometry::shape_detector::ShapeClass::Rectangle,
+            5 => crate::geometry::shape_detector::ShapeClass::Square,
+            6 => crate::geometry::shape_detector::ShapeClass::Trapezoid,
+            7 => crate::geometry::shape_detector::ShapeClass::Quadrilateral,
+            8 => crate::geometry::shape_detector::ShapeClass::Pentagon,
+            9 => crate::geometry::shape_detector::ShapeClass::Hexagon,
+            10 => crate::geometry::shape_detector::ShapeClass::Heptagon,
+            11 => crate::geometry::shape_detector::ShapeClass::Octagon,
+            12 => crate::geometry::shape_detector::ShapeClass::Star,
+            _ => unreachable!("Invalid variant for ShapeClass: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for crate::geometry::sticky_note::StickyNote {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2094,17 +2318,17 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        22 => wire__crate__api__stroke_api__export_to_pdf_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__stroke_api__export_to_pdf_bytes_impl(
+        26 => wire__crate__api__stroke_api__export_to_pdf_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__stroke_api__export_to_pdf_bytes_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__stroke_api__import_pdf_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__stroke_api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__stroke_api__load_document_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__stroke_api__save_document_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__stroke_api__import_pdf_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__stroke_api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__stroke_api__load_document_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__stroke_api__save_document_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2123,49 +2347,55 @@ fn pde_ffi_dispatcher_sync_impl(
         4 => {
             wire__crate__api__stroke_api__append_page_if_near_end_impl(ptr, rust_vec_len, data_len)
         }
-        5 => wire__crate__api__stroke_api__begin_stroke_impl(ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__stroke_api__cancel_stroke_impl(ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__stroke_api__clear_selection_impl(ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__stroke_api__content_bounds_impl(ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__stroke_api__copy_selection_impl(ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__stroke_api__create_sticky_note_impl(ptr, rust_vec_len, data_len),
-        11 => {
+        5 => wire__crate__api__stroke_api__begin_history_group_impl(ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__stroke_api__begin_stroke_impl(ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__stroke_api__can_redo_impl(ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__stroke_api__can_undo_impl(ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__stroke_api__cancel_stroke_impl(ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__stroke_api__clear_selection_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__stroke_api__content_bounds_impl(ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__stroke_api__copy_selection_impl(ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__stroke_api__create_sticky_note_impl(ptr, rust_vec_len, data_len),
+        14 => {
             wire__crate__api__stroke_api__current_stroke_preview_impl(ptr, rust_vec_len, data_len)
         }
-        12 => wire__crate__api__stroke_api__cut_selection_impl(ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__stroke_api__delete_items_impl(ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__stroke_api__delete_selection_impl(ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__stroke_api__detect_rectangle_impl(ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__stroke_api__document_info_impl(ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__stroke_api__document_pages_impl(ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__stroke_api__document_revision_impl(ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__stroke_api__duplicate_selection_impl(ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__stroke_api__erase_along_impl(ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__stroke_api__erase_at_impl(ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__stroke_api__finish_stroke_impl(ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__stroke_api__get_scene_impl(ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__stroke_api__get_selection_impl(ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__stroke_api__has_clipboard_impl(ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__stroke_api__max_page_count_impl(ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__stroke_api__new_document_impl(ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__stroke_api__page_count_impl(ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__stroke_api__paper_spec_impl(ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__stroke_api__paste_clipboard_impl(ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__stroke_api__reset_document_impl(ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__stroke_api__select_at_impl(ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__stroke_api__select_in_lasso_impl(ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__stroke_api__select_in_region_impl(ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__stroke_api__set_export_font_impl(ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__stroke_api__set_paper_style_impl(ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__stroke_api__set_selection_impl(ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__stroke_api__sticky_note_at_impl(ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__stroke_api__transform_selection_impl(ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__stroke_api__trim_trailing_blank_pages_impl(
+        15 => wire__crate__api__stroke_api__cut_selection_impl(ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__stroke_api__delete_items_impl(ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__stroke_api__delete_selection_impl(ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__stroke_api__detect_shape_impl(ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__stroke_api__document_info_impl(ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__stroke_api__document_pages_impl(ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__stroke_api__document_revision_impl(ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__stroke_api__duplicate_selection_impl(ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__stroke_api__end_history_group_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__stroke_api__erase_along_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__stroke_api__erase_at_impl(ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__stroke_api__finish_stroke_impl(ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__stroke_api__get_scene_impl(ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__stroke_api__get_selection_impl(ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__stroke_api__has_clipboard_impl(ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__stroke_api__max_page_count_impl(ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__stroke_api__new_document_impl(ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__stroke_api__page_count_impl(ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__stroke_api__paper_spec_impl(ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__stroke_api__paste_clipboard_impl(ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__stroke_api__redo_impl(ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__stroke_api__reset_document_impl(ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__stroke_api__select_at_impl(ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__stroke_api__select_in_lasso_impl(ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__stroke_api__select_in_region_impl(ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__stroke_api__set_export_font_impl(ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__stroke_api__set_paper_style_impl(ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__stroke_api__set_selection_impl(ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__stroke_api__sticky_note_at_impl(ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__stroke_api__transform_selection_impl(ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__stroke_api__trim_trailing_blank_pages_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        47 => wire__crate__api__stroke_api__update_sticky_note_impl(ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__stroke_api__undo_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__stroke_api__update_sticky_note_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2215,6 +2445,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::document::page::CanvasPage>
     for crate::document::page::CanvasPage
 {
     fn into_into_dart(self) -> crate::document::page::CanvasPage {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::geometry::shape_detector::DetectedShape {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.kind.into_into_dart().into_dart(),
+            self.points.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::geometry::shape_detector::DetectedShape
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::geometry::shape_detector::DetectedShape>
+    for crate::geometry::shape_detector::DetectedShape
+{
+    fn into_into_dart(self) -> crate::geometry::shape_detector::DetectedShape {
         self
     }
 }
@@ -2489,6 +2740,38 @@ impl flutter_rust_bridge::IntoIntoDart<crate::document::SelectionInfo>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::geometry::shape_detector::ShapeClass {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Line => 0.into_dart(),
+            Self::Circle => 1.into_dart(),
+            Self::Ellipse => 2.into_dart(),
+            Self::Triangle => 3.into_dart(),
+            Self::Rectangle => 4.into_dart(),
+            Self::Square => 5.into_dart(),
+            Self::Trapezoid => 6.into_dart(),
+            Self::Quadrilateral => 7.into_dart(),
+            Self::Pentagon => 8.into_dart(),
+            Self::Hexagon => 9.into_dart(),
+            Self::Heptagon => 10.into_dart(),
+            Self::Octagon => 11.into_dart(),
+            Self::Star => 12.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::geometry::shape_detector::ShapeClass
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::geometry::shape_detector::ShapeClass>
+    for crate::geometry::shape_detector::ShapeClass
+{
+    fn into_into_dart(self) -> crate::geometry::shape_detector::ShapeClass {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::geometry::sticky_note::StickyNote {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -2653,6 +2936,14 @@ impl SseEncode for crate::document::page::CanvasPage {
     }
 }
 
+impl SseEncode for crate::geometry::shape_detector::DetectedShape {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::geometry::shape_detector::ShapeClass>::sse_encode(self.kind, serializer);
+        <Vec<crate::geometry::point::StrokePoint>>::sse_encode(self.points, serializer);
+    }
+}
+
 impl SseEncode for crate::document::DocumentInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2803,6 +3094,26 @@ impl SseEncode for Option<crate::document::page::CanvasPage> {
     }
 }
 
+impl SseEncode for Option<crate::geometry::shape_detector::DetectedShape> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::geometry::shape_detector::DetectedShape>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::document::SceneDelta> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::document::SceneDelta>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::geometry::sticky_note::StickyNote> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2839,16 +3150,6 @@ impl SseEncode for Option<crate::geometry::point::ViewportRect> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::geometry::point::ViewportRect>::sse_encode(value, serializer);
-        }
-    }
-}
-
-impl SseEncode for Option<Vec<crate::geometry::point::StrokePoint>> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <bool>::sse_encode(self.is_some(), serializer);
-        if let Some(value) = self {
-            <Vec<crate::geometry::point::StrokePoint>>::sse_encode(value, serializer);
         }
     }
 }
@@ -2967,6 +3268,33 @@ impl SseEncode for crate::document::SelectionInfo {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<String>>::sse_encode(self.ids, serializer);
         <Option<crate::geometry::point::ViewportRect>>::sse_encode(self.bounds, serializer);
+    }
+}
+
+impl SseEncode for crate::geometry::shape_detector::ShapeClass {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::geometry::shape_detector::ShapeClass::Line => 0,
+                crate::geometry::shape_detector::ShapeClass::Circle => 1,
+                crate::geometry::shape_detector::ShapeClass::Ellipse => 2,
+                crate::geometry::shape_detector::ShapeClass::Triangle => 3,
+                crate::geometry::shape_detector::ShapeClass::Rectangle => 4,
+                crate::geometry::shape_detector::ShapeClass::Square => 5,
+                crate::geometry::shape_detector::ShapeClass::Trapezoid => 6,
+                crate::geometry::shape_detector::ShapeClass::Quadrilateral => 7,
+                crate::geometry::shape_detector::ShapeClass::Pentagon => 8,
+                crate::geometry::shape_detector::ShapeClass::Hexagon => 9,
+                crate::geometry::shape_detector::ShapeClass::Heptagon => 10,
+                crate::geometry::shape_detector::ShapeClass::Octagon => 11,
+                crate::geometry::shape_detector::ShapeClass::Star => 12,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 
