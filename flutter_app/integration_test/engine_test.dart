@@ -8,7 +8,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_app/main.dart';
 import 'package:flutter_app/screens/editor_screen.dart';
+import 'package:flutter_app/screens/home_screen.dart';
 import 'package:flutter_app/src/canvas/note_canvas.dart';
+import 'package:flutter_app/src/editor/editor_controller.dart';
+import 'package:flutter_app/src/editor/open_notebooks.dart';
 import 'package:flutter_app/src/editor/tools.dart';
 import 'package:flutter_app/src/rust/api/stroke_api.dart';
 import 'package:flutter_app/src/rust/document/eraser.dart';
@@ -22,6 +25,7 @@ import 'package:flutter_app/src/services/library_service.dart';
 import 'package:flutter_app/src/sync/google_auth.dart';
 import 'package:flutter_app/src/sync/sync_service.dart';
 import 'package:flutter_app/widgets/canvas_status_bar.dart';
+import 'package:flutter_app/widgets/editor_app_bar.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
@@ -56,7 +60,11 @@ StrokePoint _point(Offset p) => StrokePoint(x: p.dx, y: p.dy, pressure: 0.5);
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async => RustLib.init());
-  setUp(() => newDocument(kind: DocumentKind.notebook, paper: PaperStyle.dictando));
+  // Engine-level tests work on the scratch document (slot 0).
+  setUp(() {
+    activateDocument(slot: 0);
+    newDocument(slot: 0, kind: DocumentKind.notebook, paper: PaperStyle.dictando);
+  });
 
   test('hand-drawn rectangle snaps to a clean axis-aligned rectangle on pen-up', () {
     final r = _drawPolyline(const [
@@ -232,19 +240,62 @@ void main() {
     createStickyNote(x: 50, y: 200, width: 160, height: 120, color: 0xFFFFF59D, text: 'Notă');
     final dir = await Directory.systemTemp.createTemp('easynotes_it');
     final path = '${dir.path}${Platform.pathSeparator}content.ezn';
-    final report = await saveDocument(path: path);
+    final report = await saveDocument(slot: 0, path: path);
     expect(report.byteSize, greaterThan(16));
-    newDocument(kind: DocumentKind.whiteboard, paper: PaperStyle.whiteboard);
-    final info = await loadDocument(path: path);
+    newDocument(slot: 0, kind: DocumentKind.whiteboard, paper: PaperStyle.whiteboard);
+    final info = await loadDocument(slot: 0, path: path);
     expect(info.kind, DocumentKind.notebook);
     expect(getScene().notes.single.text, 'Notă');
     for (final style in [PaperStyle.dictando, PaperStyle.matematica, PaperStyle.whiteboard]) {
       setPaperStyle(style: style);
-      final bytes = await exportToPdfBytes();
+      final bytes = await exportToPdfBytes(slot: 0);
       expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
     }
     await dir.delete(recursive: true);
   });
+
+  test('documents in other slots keep their content and history; async calls name their slot', () async {
+    newDocument(slot: 101, kind: DocumentKind.notebook, paper: PaperStyle.dictando);
+    newDocument(slot: 102, kind: DocumentKind.whiteboard, paper: PaperStyle.whiteboard);
+    expect(openDocuments(), containsAll(<int>[101, 102]));
+    expect(activateDocument(slot: 999), isFalse, reason: 'nothing is open in 999');
+    expect(activateDocument(slot: 101), isTrue);
+    _drawPolyline(const [Offset(20, 100), Offset(400, 100)], autoCorrect: false);
+    _drawPolyline(const [Offset(20, 200), Offset(400, 200)], autoCorrect: false);
+
+    expect(activateDocument(slot: 102), isTrue);
+    expect(activeDocument(), 102);
+    expect(documentInfo().kind, DocumentKind.whiteboard);
+    expect(getScene().strokes, isEmpty);
+    expect(canUndo(), isFalse);
+
+    // The parked notebook is saved and exported while the whiteboard stays active.
+    final dir = await Directory.systemTemp.createTemp('easynotes_slots');
+    final path = '${dir.path}${Platform.pathSeparator}content.ezn';
+    await saveDocument(slot: 101, path: path);
+    expect(activeDocument(), 102);
+    expect((await exportToPdfBytes(slot: 101)).length, greaterThan(100));
+
+    activateDocument(slot: 101);
+    expect(getScene().strokes, hasLength(2));
+    expect(undo(), isNotNull, reason: 'history survived the switch');
+    expect(getScene().strokes, hasLength(1));
+
+    // Loading into a parked slot leaves the active document alone.
+    await loadDocument(slot: 103, path: path);
+    expect(activeDocument(), 101);
+    activateDocument(slot: 103);
+    expect(getScene().strokes, hasLength(2), reason: 'the file has both strokes');
+
+    for (final slot in [101, 102, 103]) {
+      closeDocument(slot: slot);
+    }
+    expect(openDocuments(), isEmpty);
+    expect(activeDocument(), 0, reason: 'the scratch document takes over');
+    await expectLater(saveDocument(slot: 101, path: path), throwsA(anything));
+    await dir.delete(recursive: true);
+  });
+
 
   testWidgets('app boots into the library with the Google account button top-right', (tester) async {
     final dir = await Directory.systemTemp.createTemp('easynotes_lib');
@@ -271,10 +322,11 @@ void main() {
     final lib = LibraryService(dir);
     final sync = SyncService(library: lib, auth: GoogleAuth.forPlatform());
     final entry = await lib.createNotebook(dir, 'Scroll test', NotebookTemplate.ruled);
+    final tabs = OpenNotebooks(library: lib, sync: sync)..open(entry);
     await tester.pumpWidget(
       MaterialApp(
         theme: buildEasyNotesTheme(),
-        home: EditorScreen(entry: entry, library: lib, sync: sync),
+        home: EditorScreen(tabs: tabs),
       ),
     );
     await tester.pumpAndSettle();
@@ -342,6 +394,7 @@ void main() {
     expect(find.text('Page 1 / 2'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
+    tabs.dispose();
     sync.dispose();
     await dir.delete(recursive: true);
   });
@@ -351,15 +404,16 @@ void main() {
     final lib = LibraryService(dir);
     final sync = SyncService(library: lib, auth: GoogleAuth.forPlatform());
     final entry = await lib.createNotebook(dir, 'Undo test', NotebookTemplate.ruled);
+    final tabs = OpenNotebooks(library: lib, sync: sync)..open(entry);
     await tester.pumpWidget(
       MaterialApp(
         theme: buildEasyNotesTheme(),
-        home: EditorScreen(entry: entry, library: lib, sync: sync),
+        home: EditorScreen(tabs: tabs),
       ),
     );
     await tester.pumpAndSettle();
     final c = tester.widget<CanvasStatusBar>(find.byType(CanvasStatusBar)).controller;
-    // Saves are what marks the Drive backup as pending (EditorScreen wires onSaved).
+    // Saves are what marks the Drive backup as pending (OpenNotebooks wires onSaved).
     var saves = 0;
     final markPending = c.onSaved;
     c.onSaved = () {
@@ -432,7 +486,189 @@ void main() {
     expect(c.scene.strokeCount, 1);
 
     await tester.pumpWidget(const SizedBox());
+    tabs.dispose();
     sync.dispose();
     await dir.delete(recursive: true);
   });
+
+  testWidgets('editor tabs: switch, Ctrl+Tab, separate histories, close; shapes stay ink by default', (tester) async {
+    final dir = await Directory.systemTemp.createTemp('easynotes_tabs');
+    final lib = LibraryService(dir);
+    final sync = SyncService(library: lib, auth: GoogleAuth.forPlatform());
+    final alpha = await lib.createNotebook(dir, 'Alpha', NotebookTemplate.ruled);
+    final beta = await lib.createNotebook(dir, 'Beta', NotebookTemplate.whiteboard);
+    final tabs = OpenNotebooks(library: lib, sync: sync);
+    final a = tabs.open(alpha);
+    await tester.pumpWidget(MaterialApp(theme: buildEasyNotesTheme(), home: EditorScreen(tabs: tabs)));
+    await tester.pumpAndSettle();
+
+    // Home replaces the back arrow; the status bar has no shape hint any more.
+    expect(find.byTooltip('Home'), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_back), findsNothing);
+    expect(find.widgetWithText(NotebookTab, 'Alpha'), findsOneWidget);
+    expect(find.textContaining('snap it into a rectangle'), findsNothing);
+
+    // Shape auto-correct starts OFF: a hand-drawn box stays ink.
+    expect(a.autoCorrect, isFalse);
+    expect(find.byTooltip('Shape auto-correct: OFF'), findsOneWidget);
+    _drawWith(a, const [Offset(100, 100), Offset(300, 104), Offset(297, 220), Offset(102, 216), Offset(101, 102)]);
+    await tester.pump();
+    expect(a.scene.strokes.single.render.kind, RenderKind.filledOutline);
+
+    // "+" opens another notebook from the library in a new tab.
+    await tester.tap(find.byTooltip('Open a notebook in a new tab'));
+    await _until(tester, () => find.text('Recent notebooks').evaluate().isNotEmpty);
+    await tester.pumpAndSettle();
+    expect(find.text('open'), findsOneWidget, reason: 'Alpha is marked as open');
+    await tester.tap(find.text('Beta'));
+    await tester.pumpAndSettle();
+    expect(tabs.length, 2);
+    final b = tabs.active!;
+    expect(b.title, 'Beta');
+    expect(b.autoCorrect, isFalse);
+    expect(find.byType(NotebookTab), findsNWidgets(2));
+    _drawWith(b, const [Offset(50, 50), Offset(250, 90), Offset(320, 40)]);
+    await tester.pump();
+    expect(b.scene.strokeCount, 1);
+
+    Future<void> keys(List<LogicalKeyboardKey> modifiers, LogicalKeyboardKey key) async {
+      for (final m in modifiers) {
+        await tester.sendKeyDownEvent(m);
+      }
+      await tester.sendKeyEvent(key);
+      for (final m in modifiers.reversed) {
+        await tester.sendKeyUpEvent(m);
+      }
+      await tester.pumpAndSettle();
+    }
+
+    // Ctrl+Tab back to Alpha: its content and history are untouched; undo stays per tab.
+    await keys([LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.tab);
+    expect(tabs.active, same(a));
+    expect(tester.widget<CanvasStatusBar>(find.byType(CanvasStatusBar)).controller, same(a));
+    expect(a.scene.strokeCount, 1);
+    await keys([LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyZ);
+    expect(a.scene.strokeCount, 0);
+    expect(b.scene.strokeCount, 1);
+    await keys([LogicalKeyboardKey.controlLeft, LogicalKeyboardKey.shiftLeft], LogicalKeyboardKey.tab);
+    expect(tabs.active, same(b));
+    expect(b.canUndo, isTrue);
+    await keys([LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyZ);
+    expect(b.scene.strokeCount, 0);
+    await keys([LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyY);
+    expect(b.scene.strokeCount, 1);
+    expect(a.scene.strokeCount, 0, reason: 'undo in Beta never touched Alpha');
+
+    // Clicking a tab switches; the tab left behind is written to its own file.
+    await tester.tap(find.widgetWithText(NotebookTab, 'Alpha'));
+    await tester.pumpAndSettle();
+    expect(tabs.active, same(a));
+    await b.save();
+    await loadDocument(slot: 900, path: beta.documentFile.path);
+    activateDocument(slot: 900);
+    expect(getScene().strokes, hasLength(1), reason: 'Beta saved its own stroke');
+    closeDocument(slot: 900);
+    // Alpha's next engine call points the engine back at Alpha.
+    await keys([LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyY);
+    expect(a.scene.strokeCount, 1);
+
+    // × closes Beta: saved with a thumbnail, its document freed; Alpha stays.
+    expect(openDocuments(), hasLength(2));
+    await tester.tap(
+      find.descendant(of: find.widgetWithText(NotebookTab, 'Beta'), matching: find.byTooltip('Close tab')),
+    );
+    await _until(tester, () => openDocuments().length == 1);
+    await tester.pumpAndSettle();
+    expect(tabs.length, 1);
+    expect(tabs.active, same(a));
+    expect(find.byType(NotebookTab), findsOneWidget);
+    expect(await beta.thumbnailFile.exists(), isTrue);
+
+    await tester.pumpWidget(const SizedBox());
+    tabs.dispose();
+    expect(openDocuments(), isEmpty);
+    sync.dispose();
+    await dir.delete(recursive: true);
+  });
+
+  testWidgets('home and editor: tabs stay open in the library; opening another notebook adds a tab', (tester) async {
+    final dir = await Directory.systemTemp.createTemp('easynotes_home_tabs');
+    final lib = LibraryService(dir);
+    final sync = SyncService(library: lib, auth: GoogleAuth.forPlatform());
+    await lib.createNotebook(dir, 'One', NotebookTemplate.ruled);
+    await lib.createNotebook(dir, 'Two', NotebookTemplate.grid);
+    await tester.pumpWidget(MaterialApp(theme: buildEasyNotesTheme(), home: HomeScreen(library: lib, sync: sync)));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('open tab'), findsNothing);
+
+    EditorController shown() => tester.widget<CanvasStatusBar>(find.byType(CanvasStatusBar)).controller;
+    bool editorShown() => find.byType(EditorScreen).evaluate().isNotEmpty;
+
+    await tester.tap(find.text('One'));
+    await tester.pumpAndSettle();
+    expect(editorShown(), isTrue);
+    final one = shown();
+    _drawWith(one, const [Offset(100, 200), Offset(300, 260), Offset(400, 210)]);
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Home'));
+    await _until(tester, () => !editorShown());
+    await tester.pumpAndSettle();
+    expect(find.text('1 open tab'), findsOneWidget);
+    expect(await one.entry.documentFile.exists(), isTrue, reason: 'Home saved the tab');
+
+    // Opening another notebook from the library adds a second tab.
+    await tester.tap(find.text('Two'));
+    await tester.pumpAndSettle();
+    expect(find.byType(NotebookTab), findsNWidgets(2));
+    expect(shown().title, 'Two');
+    await tester.tap(find.widgetWithText(NotebookTab, 'One'));
+    await tester.pumpAndSettle();
+    expect(shown(), same(one), reason: 'the first tab kept its controller');
+    expect(one.scene.strokeCount, 1);
+    expect(one.canUndo, isTrue, reason: 'and its undo history');
+
+    // Back to the library and straight back to the tabs.
+    await tester.tap(find.byTooltip('Home'));
+    await _until(tester, () => !editorShown());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('2 open tabs'));
+    await tester.pumpAndSettle();
+    expect(find.byType(NotebookTab), findsNWidgets(2));
+
+    // Closing the last tab returns to the library.
+    for (final name in ['Two', 'One']) {
+      await tester.tap(
+        find.descendant(of: find.widgetWithText(NotebookTab, name), matching: find.byTooltip('Close tab')),
+      );
+      await _until(tester, () => find.widgetWithText(NotebookTab, name).evaluate().isEmpty);
+    }
+    await _until(tester, () => !editorShown());
+    await tester.pumpAndSettle();
+    expect(find.textContaining('open tab'), findsNothing);
+    expect(openDocuments(), isEmpty);
+
+    await tester.pumpWidget(const SizedBox());
+    sync.dispose();
+    await dir.delete(recursive: true);
+  });
+}
+
+/// Draws a pen stroke through [path] with the controller (as the canvas does).
+void _drawWith(EditorController c, List<Offset> path) {
+  c.beginStroke(EditorTool.pen, path.first, 0.5);
+  for (var i = 0; i + 1 < path.length; i++) {
+    for (var k = 1; k <= 20; k++) {
+      c.addPoint(Offset.lerp(path[i], path[i + 1], k / 20)!, 0.5);
+    }
+  }
+  c.finishStroke(EditorTool.pen);
+}
+
+/// Pumps real-time frames until [done] (saves and file I/O run on real threads here).
+Future<void> _until(WidgetTester tester, bool Function() done, {int tries = 200}) async {
+  for (var i = 0; i < tries && !done(); i++) {
+    await tester.pump(const Duration(milliseconds: 25));
+  }
+  expect(done(), isTrue, reason: 'condition not reached in time');
 }

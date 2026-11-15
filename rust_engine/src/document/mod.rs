@@ -20,12 +20,14 @@ pub mod page;
 pub mod paper;
 pub mod pdf_importer;
 pub mod storage;
+pub mod workspace;
 
 pub use eraser::EraserMode;
 pub use page::{CanvasPage, DocumentKind, PageStack, PAGE_HEIGHT, PAGE_WIDTH};
 pub use paper::{PaperKind, PaperSpec, PaperStyle};
 pub use pdf_importer::ImportedPdf;
 pub use storage::DocumentData;
+pub use workspace::Workspace;
 
 use crate::geometry::stroke::process_input;
 use crate::geometry::{

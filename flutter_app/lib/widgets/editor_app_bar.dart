@@ -1,24 +1,36 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../src/editor/editor_controller.dart';
+import '../src/editor/open_notebooks.dart';
 import '../src/editor/tools.dart';
 import '../src/rust/document/paper.dart';
+import '../src/services/library_service.dart';
 
-/// Slim dark top bar of the editor: back, title, paper style, input options, export.
-/// Drawing tools live in the floating [DraggableToolbar].
+const Color _chrome = Color(0xFF252526);
+const Color _activeTab = Color(0xFF37373C);
+const Color _accent = Color(0xFF8AB4F8);
+
+/// Slim dark top bar of the editor: Home, the tabs of the open notebooks (+ quick open),
+/// then the active notebook's paper style, input options and export. Drawing tools live in
+/// the floating [DraggableToolbar].
 class EditorAppBar extends StatelessWidget {
   const EditorAppBar({
     super.key,
-    required this.controller,
-    required this.onBack,
+    required this.tabs,
+    required this.onHome,
+    required this.onCloseTab,
     required this.onPaste,
     required this.onClear,
     required this.onExport,
     required this.exporting,
   });
 
-  final EditorController controller;
-  final VoidCallback onBack;
+  final OpenNotebooks tabs;
+
+  /// Back to the library; the tabs stay open.
+  final VoidCallback onHome;
+  final ValueChanged<EditorController> onCloseTab;
   final VoidCallback onPaste;
   final VoidCallback onClear;
   final VoidCallback onExport;
@@ -27,114 +39,395 @@ class EditorAppBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 640;
+    final controller = tabs.active;
     return Material(
-      color: const Color(0xFF252526),
+      color: _chrome,
       elevation: 2,
       child: SafeArea(
         bottom: false,
         child: SizedBox(
           height: 52,
-          child: ListenableBuilder(
-            listenable: controller,
-            builder: (context, _) => Row(
-              children: [
-                IconButton(
-                  tooltip: 'Back to library',
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: onBack,
+          child: Row(
+            children: [
+              IconButton(tooltip: 'Home', icon: const Icon(Icons.home_outlined), onPressed: onHome),
+              Expanded(
+                child: NotebookTabBar(tabs: tabs, compact: compact, onClose: onCloseTab, onBrowse: onHome),
+              ),
+              if (controller != null)
+                ListenableBuilder(
+                  listenable: controller,
+                  builder: (context, _) => _actions(context, controller, compact),
                 ),
-                Expanded(
-                  child: Text(
-                    controller.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.white),
-                  ),
-                ),
-                if (controller.isOpen && controller.isPaged)
-                  PopupMenuButton<PaperStyle>(
-                    tooltip: 'Paper',
-                    initialValue: controller.paperStyle,
-                    onSelected: controller.setPaperStyle,
-                    itemBuilder: (_) => [
-                      for (final s in const [PaperStyle.dictando, PaperStyle.matematica, PaperStyle.whiteboard])
-                        CheckedPopupMenuItem(value: s, checked: s == controller.paperStyle, child: Text(s.label)),
-                    ],
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: Row(
-                        children: [
-                          Icon(controller.paperStyle.icon, size: 20, color: Colors.white70),
-                          if (!compact) ...[
-                            const SizedBox(width: 6),
-                            Text(controller.paperStyle.label, style: const TextStyle(color: Colors.white70)),
-                          ],
-                          const Icon(Icons.arrow_drop_down, color: Colors.white54),
-                        ],
-                      ),
-                    ),
-                  ),
-                IconButton(
-                  tooltip: controller.autoCorrect ? 'Shape auto-correct: ON' : 'Shape auto-correct: OFF',
-                  isSelected: controller.autoCorrect,
-                  icon: const Icon(Icons.crop_square),
-                  selectedIcon: const Icon(Icons.auto_fix_high),
-                  onPressed: () => controller.setAutoCorrect(!controller.autoCorrect),
-                ),
-                IconButton(
-                  tooltip: controller.stylusOnly
-                      ? 'Stylus only: fingers pan & zoom'
-                      : 'Finger drawing: one finger draws, two fingers navigate',
-                  isSelected: controller.stylusOnly,
-                  icon: const Icon(Icons.touch_app_outlined),
-                  selectedIcon: const Icon(Icons.do_not_touch_outlined),
-                  onPressed: () => controller.setStylusOnly(!controller.stylusOnly),
-                ),
-                IconButton(
-                  tooltip: 'Paste (Ctrl+V)',
-                  icon: const Icon(Icons.content_paste),
-                  onPressed: controller.hasClipboard ? onPaste : null,
-                ),
-                const SizedBox(width: 4),
-                if (compact)
-                  IconButton(
-                    tooltip: 'Export PDF',
-                    onPressed: exporting || !controller.isOpen ? null : onExport,
-                    icon: exporting
-                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.picture_as_pdf_outlined),
-                  )
-                else
-                  FilledButton.tonalIcon(
-                    onPressed: exporting || !controller.isOpen ? null : onExport,
-                    icon: exporting
-                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.picture_as_pdf_outlined),
-                    label: const Text('Export PDF'),
-                  ),
-                PopupMenuButton<String>(
-                  tooltip: 'More',
-                  icon: const Icon(Icons.more_vert),
-                  onSelected: (v) {
-                    if (v == 'clear') onClear();
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: 'clear',
-                      child: ListTile(
-                        leading: Icon(Icons.delete_sweep_outlined),
-                        title: Text('Clear all ink & notes'),
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 4),
-              ],
-            ),
+            ],
           ),
         ),
       ),
     );
   }
+
+  Widget _actions(BuildContext context, EditorController controller, bool compact) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      if (controller.isOpen && controller.isPaged)
+        PopupMenuButton<PaperStyle>(
+          tooltip: 'Paper',
+          initialValue: controller.paperStyle,
+          onSelected: controller.setPaperStyle,
+          itemBuilder: (_) => [
+            for (final s in const [PaperStyle.dictando, PaperStyle.matematica, PaperStyle.whiteboard])
+              CheckedPopupMenuItem(value: s, checked: s == controller.paperStyle, child: Text(s.label)),
+          ],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                Icon(controller.paperStyle.icon, size: 20, color: Colors.white70),
+                if (!compact) ...[
+                  const SizedBox(width: 6),
+                  Text(controller.paperStyle.label, style: const TextStyle(color: Colors.white70)),
+                ],
+                const Icon(Icons.arrow_drop_down, color: Colors.white54),
+              ],
+            ),
+          ),
+        ),
+      IconButton(
+        tooltip: controller.autoCorrect ? 'Shape auto-correct: ON' : 'Shape auto-correct: OFF',
+        isSelected: controller.autoCorrect,
+        icon: const Icon(Icons.crop_square),
+        selectedIcon: const Icon(Icons.auto_fix_high),
+        onPressed: () => controller.setAutoCorrect(!controller.autoCorrect),
+      ),
+      IconButton(
+        tooltip: controller.stylusOnly
+            ? 'Stylus only: fingers pan & zoom'
+            : 'Finger drawing: one finger draws, two fingers navigate',
+        isSelected: controller.stylusOnly,
+        icon: const Icon(Icons.touch_app_outlined),
+        selectedIcon: const Icon(Icons.do_not_touch_outlined),
+        onPressed: () => controller.setStylusOnly(!controller.stylusOnly),
+      ),
+      IconButton(
+        tooltip: 'Paste (Ctrl+V)',
+        icon: const Icon(Icons.content_paste),
+        onPressed: controller.hasClipboard ? onPaste : null,
+      ),
+      const SizedBox(width: 4),
+      if (compact)
+        IconButton(
+          tooltip: 'Export PDF',
+          onPressed: exporting || !controller.isOpen ? null : onExport,
+          icon: exporting
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.picture_as_pdf_outlined),
+        )
+      else
+        FilledButton.tonalIcon(
+          onPressed: exporting || !controller.isOpen ? null : onExport,
+          icon: exporting
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.picture_as_pdf_outlined),
+          label: const Text('Export PDF'),
+        ),
+      PopupMenuButton<String>(
+        tooltip: 'More',
+        icon: const Icon(Icons.more_vert),
+        onSelected: (v) {
+          if (v == 'clear') onClear();
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(
+            value: 'clear',
+            child: ListTile(
+              leading: Icon(Icons.delete_sweep_outlined),
+              title: Text('Clear all ink & notes'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(width: 4),
+    ],
+  );
+}
+
+/// The open notebooks as a horizontal strip of tabs: tap one to switch, × (or a middle
+/// click) to close it, `+` to open another notebook from the library or jump to an open
+/// one. Scrolls sideways (also with the mouse wheel) when the tabs do not fit, and keeps the
+/// active tab in view.
+class NotebookTabBar extends StatefulWidget {
+  const NotebookTabBar({
+    super.key,
+    required this.tabs,
+    required this.onClose,
+    required this.onBrowse,
+    this.compact = false,
+  });
+
+  final OpenNotebooks tabs;
+  final ValueChanged<EditorController> onClose;
+
+  /// "Browse the library…" in the `+` menu.
+  final VoidCallback onBrowse;
+  final bool compact;
+
+  @override
+  State<NotebookTabBar> createState() => _NotebookTabBarState();
+}
+
+class _NotebookTabBarState extends State<NotebookTabBar> {
+  final ScrollController _scroll = ScrollController();
+  final Map<EditorController, GlobalKey> _keys = {};
+  EditorController? _revealed;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Scrolls the newly active tab into view (as little as possible).
+  void _revealActive() {
+    final active = widget.tabs.active;
+    if (active == null || identical(active, _revealed)) return;
+    _revealed = active;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final tab = _keys[active]?.currentContext;
+      if (!mounted || tab == null) return;
+      Scrollable.ensureVisible(tab, alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+      Scrollable.ensureVisible(tab, alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart);
+    });
+  }
+
+  /// A vertical mouse wheel scrolls the strip sideways.
+  void _onPointerSignal(PointerSignalEvent e) {
+    if (e is! PointerScrollEvent || !_scroll.hasClients || e.scrollDelta.dy == 0) return;
+    final p = _scroll.position;
+    _scroll.jumpTo((p.pixels + e.scrollDelta.dy).clamp(p.minScrollExtent, p.maxScrollExtent));
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: widget.tabs,
+    builder: (context, _) {
+      final tabs = widget.tabs.tabs;
+      final active = widget.tabs.active;
+      _keys.removeWhere((c, _) => !tabs.contains(c));
+      _revealActive();
+      return Row(
+        children: [
+          Flexible(
+            child: Listener(
+              onPointerSignal: _onPointerSignal,
+              child: SingleChildScrollView(
+                controller: _scroll,
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final c in tabs)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: NotebookTab(
+                          key: _keys.putIfAbsent(c, () => GlobalKey()),
+                          controller: c,
+                          active: identical(c, active),
+                          maxTitleWidth: widget.compact ? 110 : 190,
+                          onSelect: () => widget.tabs.activate(widget.tabs.tabs.indexOf(c)),
+                          onClose: () => widget.onClose(c),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          _QuickOpenButton(tabs: widget.tabs, onBrowse: widget.onBrowse),
+        ],
+      );
+    },
+  );
+}
+
+/// One tab: notebook kind (a spinner while it loads), title and a close button.
+class NotebookTab extends StatelessWidget {
+  const NotebookTab({
+    super.key,
+    required this.controller,
+    required this.active,
+    required this.onSelect,
+    required this.onClose,
+    this.maxTitleWidth = 190,
+  });
+
+  final EditorController controller;
+  final bool active;
+  final VoidCallback onSelect;
+  final VoidCallback onClose;
+  final double maxTitleWidth;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller,
+    builder: (context, _) {
+      final title = controller.title;
+      final foreground = active ? Colors.white : Colors.white60;
+      final Widget leading = controller.openError != null
+          ? const Icon(Icons.error_outline, size: 16, color: Colors.redAccent)
+          : !controller.isOpen
+          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.6))
+          : Icon(controller.entry.meta.kind.icon, size: 16, color: active ? _accent : Colors.white54);
+      return Listener(
+        onPointerDown: (e) {
+          if (e.kind == PointerDeviceKind.mouse && e.buttons == kMiddleMouseButton) onClose();
+        },
+        child: Semantics(
+          selected: active,
+          child: Material(
+            color: active ? _activeTab : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onSelect,
+              child: Container(
+                height: 36,
+                padding: const EdgeInsets.only(left: 10, right: 2),
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: active ? _accent : Colors.transparent, width: 2)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Tooltip(
+                      message: title,
+                      waitDuration: const Duration(milliseconds: 700),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          leading,
+                          const SizedBox(width: 8),
+                          ConstrainedBox(
+                            constraints: BoxConstraints(maxWidth: maxTitleWidth),
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: foreground,
+                                fontSize: 13.5,
+                                fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    IconButton(
+                      tooltip: 'Close tab',
+                      onPressed: onClose,
+                      icon: const Icon(Icons.close),
+                      iconSize: 16,
+                      color: foreground,
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+enum _QuickOpenAction { browse }
+
+/// `+` next to the tabs: the most recently edited notebooks of the whole library (open
+/// ones are marked; picking one switches to its tab) and a way back to the library.
+class _QuickOpenButton extends StatelessWidget {
+  const _QuickOpenButton({required this.tabs, required this.onBrowse});
+
+  final OpenNotebooks tabs;
+  final VoidCallback onBrowse;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: 'Open a notebook in a new tab',
+    icon: const Icon(Icons.add),
+    onPressed: () => _show(context),
+  );
+
+  Future<void> _show(BuildContext context) async {
+    final library = tabs.library;
+    final button = context.findRenderObject()! as RenderBox;
+    final overlay = Navigator.of(context).overlay!.context.findRenderObject()! as RenderBox;
+    final below = Offset(0, button.size.height);
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(below, ancestor: overlay),
+        button.localToGlobal(button.size.bottomRight(Offset.zero) + below, ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final recent = await library.recentNotebooks(limit: 10);
+    if (!context.mounted) return;
+    final label = Theme.of(context).textTheme.labelMedium?.copyWith(color: Colors.white54);
+    final choice = await showMenu<Object>(
+      context: context,
+      position: position,
+      items: [
+        PopupMenuItem<Object>(enabled: false, height: 32, child: Text('Recent notebooks', style: label)),
+        if (recent.isEmpty)
+          const PopupMenuItem<Object>(enabled: false, child: Text('No other notebooks yet')),
+        for (final e in recent)
+          PopupMenuItem<Object>(
+            value: e,
+            child: _RecentNotebook(entry: e, folder: _folderLabel(library, e), open: tabs.tabOf(e) != null),
+          ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<Object>(
+          value: _QuickOpenAction.browse,
+          child: ListTile(
+            leading: Icon(Icons.home_outlined),
+            title: Text('Browse the library…'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+      ],
+    );
+    switch (choice) {
+      case NotebookEntry():
+        tabs.open(choice);
+      case _QuickOpenAction.browse:
+        onBrowse();
+    }
+  }
+
+  static String _folderLabel(LibraryService library, NotebookEntry e) {
+    final crumbs = library.breadcrumbs(e.dir.parent);
+    return crumbs.isEmpty ? 'Library' : crumbs.join(' › ');
+  }
+}
+
+class _RecentNotebook extends StatelessWidget {
+  const _RecentNotebook({required this.entry, required this.folder, required this.open});
+
+  final NotebookEntry entry;
+  final String folder;
+  final bool open;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+    leading: Icon(entry.meta.kind.icon),
+    title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+    subtitle: Text(folder, maxLines: 1, overflow: TextOverflow.ellipsis),
+    trailing: open ? const Text('open', style: TextStyle(color: _accent, fontSize: 12)) : null,
+    contentPadding: EdgeInsets.zero,
+    dense: true,
+  );
 }

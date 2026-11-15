@@ -204,6 +204,17 @@ class LibraryService {
   static NotebookMeta _defaultMeta(DateTime t) =>
       NotebookMeta(kind: DocumentKind.notebook, paper: PaperStyle.dictando, pageCount: 1, created: t, modified: t);
 
+  /// Every notebook in the library, most recently modified first (the editor's quick-open
+  /// menu).
+  Future<List<NotebookEntry>> recentNotebooks({int limit = 12}) async {
+    final all = <NotebookEntry>[];
+    for (final folder in await allFolders()) {
+      all.addAll((await list(folder)).whereType<NotebookEntry>());
+    }
+    all.sort((a, b) => b.meta.modified.compareTo(a.meta.modified));
+    return all.take(limit).toList();
+  }
+
   /// All folders (depth-first) for the "Move to…" picker, root first.
   Future<List<Directory>> allFolders() async {
     final out = <Directory>[root];
@@ -374,8 +385,20 @@ class LibraryService {
   /// Windows and macOS file systems are case-insensitive by default.
   static String _fold(String p) => Platform.isWindows || Platform.isMacOS ? p.toLowerCase() : p;
 
-  static bool _same(String a, String b) {
-    String norm(String p) => _fold(Directory(p).absolute.path.replaceAll(RegExp(r'[\\/]+$'), ''));
-    return norm(a) == norm(b);
-  }
+  /// Absolute, without a trailing separator.
+  static String _norm(String p) => Directory(p).absolute.path.replaceAll(RegExp(r'[\\/]+$'), '');
+
+  static bool _same(String a, String b) => _fold(_norm(a)) == _fold(_norm(b));
+
+  /// Whether [a] and [b] name the same location.
+  static bool samePath(String a, String b) => _same(a, b);
+
+  /// Whether [path] is [folder] itself or lies somewhere inside it.
+  static bool isWithin(String path, String folder) =>
+      _same(path, folder) || _fold(_norm(path)).startsWith(_fold('${_norm(folder)}${Platform.pathSeparator}'));
+
+  /// Where [path] is after [from] (the path itself or a folder containing it) moved to
+  /// [to]; `null` when [path] is not inside [from].
+  static String? rebase(String path, String from, String to) =>
+      isWithin(path, from) ? '${_norm(to)}${_norm(path).substring(_norm(from).length)}' : null;
 }

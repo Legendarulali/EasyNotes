@@ -16,36 +16,63 @@ import '../geometry/stroke.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `document`, `engine`, `take`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ExportSnapshot`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `eq`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `document`, `engine`, `install`, `take`, `with_document`, `workspace`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ActiveEngine`, `ExportSnapshot`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `deref_mut`, `deref`, `eq`, `fmt`
 
-/// Replaces the open document with an empty one of `kind` (notebooks start with a single
+/// Makes the document of `slot` the one every editing call works on (switching tabs).
+/// Parked documents keep their history, selection and unfinished stroke; the clipboard
+/// moves along. Returns `false` (nothing changes) when no document is open in `slot`.
+/// Slot `0` is the scratch document and always exists.
+bool activateDocument({required int slot}) =>
+    RustLib.instance.api.crateApiStrokeApiActivateDocument(slot: slot);
+
+/// Slot of the active document.
+int activeDocument() => RustLib.instance.api.crateApiStrokeApiActiveDocument();
+
+/// Frees the document of `slot` (tab closed). If it was active, the scratch document
+/// takes over.
+void closeDocument({required int slot}) =>
+    RustLib.instance.api.crateApiStrokeApiCloseDocument(slot: slot);
+
+/// Slots of the documents open in tabs (the scratch document is not listed).
+Uint32List openDocuments() =>
+    RustLib.instance.api.crateApiStrokeApiOpenDocuments();
+
+/// Puts an empty document of `kind` into `slot` (notebooks start with a single
 /// 1000 × 1000 page; whiteboards are unbounded).
 DocumentInfo newDocument({
+  required int slot,
   required DocumentKind kind,
   required PaperStyle paper,
-}) =>
-    RustLib.instance.api.crateApiStrokeApiNewDocument(kind: kind, paper: paper);
+}) => RustLib.instance.api.crateApiStrokeApiNewDocument(
+  slot: slot,
+  kind: kind,
+  paper: paper,
+);
 
-/// Opens the PDF at `path` as a new annotation document: one page per PDF page, each
-/// 1000 units wide with the PDF page's aspect ratio.
-Future<DocumentInfo> importPdf({required String path}) =>
-    RustLib.instance.api.crateApiStrokeApiImportPdf(path: path);
+/// Opens the PDF at `path` as a new annotation document in `slot`: one page per PDF
+/// page, each 1000 units wide with the PDF page's aspect ratio.
+Future<DocumentInfo> importPdf({required int slot, required String path}) =>
+    RustLib.instance.api.crateApiStrokeApiImportPdf(slot: slot, path: path);
 
-/// Loads a document saved by [`save_document`]. `pdf_path` is the document's imported
-/// PDF (page backgrounds), if it has one.
-Future<DocumentInfo> loadDocument({required String path, String? pdfPath}) =>
-    RustLib.instance.api.crateApiStrokeApiLoadDocument(
-      path: path,
-      pdfPath: pdfPath,
-    );
+/// Loads a document saved by [`save_document`] into `slot`. `pdf_path` is the document's
+/// imported PDF (page backgrounds), if it has one.
+Future<DocumentInfo> loadDocument({
+  required int slot,
+  required String path,
+  String? pdfPath,
+}) => RustLib.instance.api.crateApiStrokeApiLoadDocument(
+  slot: slot,
+  path: path,
+  pdfPath: pdfPath,
+);
 
-/// Saves the open document to `path` (atomically: temp file + rename).
-Future<SaveReport> saveDocument({required String path}) =>
-    RustLib.instance.api.crateApiStrokeApiSaveDocument(path: path);
+/// Saves the document of `slot` to `path` (atomically: temp file + rename).
+Future<SaveReport> saveDocument({required int slot, required String path}) =>
+    RustLib.instance.api.crateApiStrokeApiSaveDocument(slot: slot, path: path);
 
-/// Kind, paper, page stack and revision of the open document.
+/// Kind, paper, page stack and revision of the active document.
 DocumentInfo documentInfo() =>
     RustLib.instance.api.crateApiStrokeApiDocumentInfo();
 
@@ -79,7 +106,7 @@ int trimTrailingBlankPages() =>
 /// Upper bound on the number of pages of a document.
 int maxPageCount() => RustLib.instance.api.crateApiStrokeApiMaxPageCount();
 
-/// Changes the paper pattern of the open document.
+/// Changes the paper pattern of the active document.
 DocumentInfo setPaperStyle({required PaperStyle style}) =>
     RustLib.instance.api.crateApiStrokeApiSetPaperStyle(style: style);
 
@@ -278,14 +305,16 @@ StickyNote? stickyNoteAt({required double x, required double y}) =>
 bool setExportFont({required List<int> fontBytes}) =>
     RustLib.instance.api.crateApiStrokeApiSetExportFont(fontBytes: fontBytes);
 
-/// Writes the whole document as a vector PDF to `path`: one PDF page per page (imported
-/// PDF pages are re-embedded underneath the annotations, as vectors).
-Future<PdfExportReport> exportToPdf({required String path}) =>
-    RustLib.instance.api.crateApiStrokeApiExportToPdf(path: path);
+/// Writes the whole document of `slot` as a vector PDF to `path`: one PDF page per page
+/// (imported PDF pages are re-embedded underneath the annotations, as vectors).
+Future<PdfExportReport> exportToPdf({
+  required int slot,
+  required String path,
+}) => RustLib.instance.api.crateApiStrokeApiExportToPdf(slot: slot, path: path);
 
-/// Renders the document as PDF bytes (for share sheets / save dialogs).
-Future<Uint8List> exportToPdfBytes() =>
-    RustLib.instance.api.crateApiStrokeApiExportToPdfBytes();
+/// Renders the document of `slot` as PDF bytes (for share sheets / save dialogs).
+Future<Uint8List> exportToPdfBytes({required int slot}) =>
+    RustLib.instance.api.crateApiStrokeApiExportToPdfBytes(slot: slot);
 
 /// Result of [`save_document`].
 class SaveReport {

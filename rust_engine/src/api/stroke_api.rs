@@ -4,10 +4,15 @@
 //! immediately (no async hop while the pen is moving). Heavy work (PDF import / export,
 //! saving and loading) is async and runs on frb's worker pool; it snapshots the document
 //! under the lock and does the slow part without holding it, so drawing never stalls.
+//!
+//! Several documents can be open at once (editor tabs, see [`Workspace`]). The editing
+//! calls work on the *active* one, chosen with [`activate_document`]. The async calls run
+//! later on a worker thread, when another tab may be active, so they name their document's
+//! slot explicitly.
 
 use crate::document::{
     storage, CanvasPage, DocumentInfo, DocumentKind, Engine, EraserMode, ImportedPdf, PaperSpec,
-    PaperStyle, SceneDelta, SceneSnapshot, SelectionInfo,
+    PaperStyle, SceneDelta, SceneSnapshot, SelectionInfo, Workspace,
 };
 use crate::export::{self, ExportDocument, PdfExportReport};
 use crate::geometry::{
@@ -15,17 +20,55 @@ use crate::geometry::{
 };
 use anyhow::Context;
 use flutter_rust_bridge::frb;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
-static ENGINE: LazyLock<Mutex<Engine>> = LazyLock::new(|| Mutex::new(Engine::new()));
+static WORKSPACE: LazyLock<Mutex<Workspace>> = LazyLock::new(|| Mutex::new(Workspace::new()));
 static EXPORT_FONT: LazyLock<Mutex<Option<Arc<Vec<u8>>>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Locks the engine, recovering from a poisoned mutex (a panic in one call must not
-/// brick the whole canvas).
-fn engine() -> MutexGuard<'static, Engine> {
-    ENGINE
+/// Locks the open documents, recovering from a poisoned mutex (a panic in one call must
+/// not brick the whole canvas).
+fn workspace() -> MutexGuard<'static, Workspace> {
+    WORKSPACE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The locked active document.
+struct ActiveEngine(MutexGuard<'static, Workspace>);
+
+impl Deref for ActiveEngine {
+    type Target = Engine;
+
+    fn deref(&self) -> &Engine {
+        self.0.active()
+    }
+}
+
+impl DerefMut for ActiveEngine {
+    fn deref_mut(&mut self) -> &mut Engine {
+        self.0.active_mut()
+    }
+}
+
+fn engine() -> ActiveEngine {
+    ActiveEngine(workspace())
+}
+
+/// Runs `f` on the document of `slot` (active or parked) under the lock.
+fn with_document<R>(slot: u32, f: impl FnOnce(&Engine) -> R) -> anyhow::Result<R> {
+    let ws = workspace();
+    let doc = ws
+        .get(slot)
+        .with_context(|| format!("document {slot} is not open"))?;
+    Ok(f(doc))
+}
+
+/// Puts a freshly created / loaded document into `slot`.
+fn install(slot: u32, doc: Engine) -> DocumentInfo {
+    let info = doc.info();
+    workspace().install(slot, doc);
+    info
 }
 
 /// Result of [`save_document`].
@@ -42,47 +85,71 @@ pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
 }
 
+// ============================================================================ open documents
+
+/// Makes the document of `slot` the one every editing call works on (switching tabs).
+/// Parked documents keep their history, selection and unfinished stroke; the clipboard
+/// moves along. Returns `false` (nothing changes) when no document is open in `slot`.
+/// Slot `0` is the scratch document and always exists.
+#[frb(sync)]
+pub fn activate_document(slot: u32) -> bool {
+    workspace().activate(slot)
+}
+
+/// Slot of the active document.
+#[frb(sync)]
+pub fn active_document() -> u32 {
+    workspace().active_slot()
+}
+
+/// Frees the document of `slot` (tab closed). If it was active, the scratch document
+/// takes over.
+#[frb(sync)]
+pub fn close_document(slot: u32) {
+    workspace().close(slot);
+}
+
+/// Slots of the documents open in tabs (the scratch document is not listed).
+#[frb(sync)]
+pub fn open_documents() -> Vec<u32> {
+    workspace().slots()
+}
+
 // ============================================================================ document
 
-/// Replaces the open document with an empty one of `kind` (notebooks start with a single
+/// Puts an empty document of `kind` into `slot` (notebooks start with a single
 /// 1000 × 1000 page; whiteboards are unbounded).
 #[frb(sync)]
-pub fn new_document(kind: DocumentKind, paper: PaperStyle) -> DocumentInfo {
-    let mut e = engine();
-    *e = Engine::with_kind(kind, paper);
-    e.info()
+pub fn new_document(slot: u32, kind: DocumentKind, paper: PaperStyle) -> DocumentInfo {
+    install(slot, Engine::with_kind(kind, paper))
 }
 
-/// Opens the PDF at `path` as a new annotation document: one page per PDF page, each
-/// 1000 units wide with the PDF page's aspect ratio.
-pub fn import_pdf(path: String) -> anyhow::Result<DocumentInfo> {
+/// Opens the PDF at `path` as a new annotation document in `slot`: one page per PDF
+/// page, each 1000 units wide with the PDF page's aspect ratio.
+pub fn import_pdf(slot: u32, path: String) -> anyhow::Result<DocumentInfo> {
     let pdf = ImportedPdf::read(&path)?;
-    let mut e = engine();
-    *e = Engine::with_pdf(pdf);
-    Ok(e.info())
+    Ok(install(slot, Engine::with_pdf(pdf)))
 }
 
-/// Loads a document saved by [`save_document`]. `pdf_path` is the document's imported
-/// PDF (page backgrounds), if it has one.
-pub fn load_document(path: String, pdf_path: Option<String>) -> anyhow::Result<DocumentInfo> {
+/// Loads a document saved by [`save_document`] into `slot`. `pdf_path` is the document's
+/// imported PDF (page backgrounds), if it has one.
+pub fn load_document(
+    slot: u32,
+    path: String,
+    pdf_path: Option<String>,
+) -> anyhow::Result<DocumentInfo> {
     let bytes = std::fs::read(&path).with_context(|| format!("reading {path}"))?;
     let data = storage::decode(&bytes)?;
     let pdf = match pdf_path {
         Some(p) if data.kind == DocumentKind::PdfAnnotation => Some(ImportedPdf::read(&p)?),
         _ => None,
     };
-    let loaded = Engine::from_data(data, pdf);
-    let mut e = engine();
-    *e = loaded;
-    Ok(e.info())
+    Ok(install(slot, Engine::from_data(data, pdf)))
 }
 
-/// Saves the open document to `path` (atomically: temp file + rename).
-pub fn save_document(path: String) -> anyhow::Result<SaveReport> {
-    let (data, revision) = {
-        let e = engine();
-        (e.data(), e.revision())
-    };
+/// Saves the document of `slot` to `path` (atomically: temp file + rename).
+pub fn save_document(slot: u32, path: String) -> anyhow::Result<SaveReport> {
+    let (data, revision) = with_document(slot, |e| (e.data(), e.revision()))?;
     let bytes = storage::encode(&data)?;
     storage::write_atomic(&path, &bytes)?;
     Ok(SaveReport {
@@ -92,7 +159,7 @@ pub fn save_document(path: String) -> anyhow::Result<SaveReport> {
     })
 }
 
-/// Kind, paper, page stack and revision of the open document.
+/// Kind, paper, page stack and revision of the active document.
 #[frb(sync)]
 pub fn document_info() -> DocumentInfo {
     engine().info()
@@ -142,7 +209,7 @@ pub fn max_page_count() -> u32 {
     crate::document::page::MAX_PAGES
 }
 
-/// Changes the paper pattern of the open document.
+/// Changes the paper pattern of the active document.
 #[frb(sync)]
 pub fn set_paper_style(style: PaperStyle) -> DocumentInfo {
     let mut e = engine();
@@ -415,16 +482,13 @@ struct ExportSnapshot {
 }
 
 impl ExportSnapshot {
-    fn take() -> Self {
-        let (data, pdf) = {
-            let e = engine();
-            (e.data(), e.pdf().map(|p| p.bytes.clone()))
-        };
+    fn take(slot: u32) -> anyhow::Result<Self> {
+        let (data, pdf) = with_document(slot, |e| (e.data(), e.pdf().map(|p| p.bytes.clone())))?;
         let font = EXPORT_FONT
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        Self { data, pdf, font }
+        Ok(Self { data, pdf, font })
     }
 
     fn document(&self) -> ExportDocument<'_> {
@@ -439,10 +503,10 @@ impl ExportSnapshot {
     }
 }
 
-/// Writes the whole document as a vector PDF to `path`: one PDF page per page (imported
-/// PDF pages are re-embedded underneath the annotations, as vectors).
-pub fn export_to_pdf(path: String) -> anyhow::Result<PdfExportReport> {
-    let snap = ExportSnapshot::take();
+/// Writes the whole document of `slot` as a vector PDF to `path`: one PDF page per page
+/// (imported PDF pages are re-embedded underneath the annotations, as vectors).
+pub fn export_to_pdf(slot: u32, path: String) -> anyhow::Result<PdfExportReport> {
+    let snap = ExportSnapshot::take(slot)?;
     export::export_document(
         &path,
         &snap.document(),
@@ -450,9 +514,9 @@ pub fn export_to_pdf(path: String) -> anyhow::Result<PdfExportReport> {
     )
 }
 
-/// Renders the document as PDF bytes (for share sheets / save dialogs).
-pub fn export_to_pdf_bytes() -> anyhow::Result<Vec<u8>> {
-    let snap = ExportSnapshot::take();
+/// Renders the document of `slot` as PDF bytes (for share sheets / save dialogs).
+pub fn export_to_pdf_bytes(slot: u32) -> anyhow::Result<Vec<u8>> {
+    let snap = ExportSnapshot::take(slot)?;
     export::render_document(&snap.document(), snap.font.as_deref().map(Vec::as_slice))
         .map(|(bytes, _)| bytes)
 }

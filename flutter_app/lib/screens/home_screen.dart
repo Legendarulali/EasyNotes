@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../src/editor/open_notebooks.dart';
 import '../src/rust/document/page.dart';
 import '../src/rust/document/paper.dart';
 import '../src/services/library_service.dart';
@@ -33,6 +34,10 @@ class _HomeScreenState extends State<HomeScreen> {
   LibraryService get lib => widget.library;
 
   late Directory _folder = lib.root;
+
+  /// Notebooks open in editor tabs; they stay open while the library is shown.
+  late final OpenNotebooks _tabs = OpenNotebooks(library: lib, sync: widget.sync);
+  bool _editorShown = false;
   List<LibraryEntry> _entries = const [];
   bool _loading = true;
   bool _busy = false;
@@ -42,6 +47,12 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
   }
 
   Future<void> _refresh() async {
@@ -85,11 +96,23 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!lib.isRoot(_folder)) _enter(_folder.parent);
   }
 
+  /// Opens [entry] in a tab (or switches to its tab) and shows the editor.
   Future<void> _open(NotebookEntry entry) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<bool>(builder: (_) => EditorScreen(entry: entry, library: lib, sync: widget.sync)),
-    );
-    _thumbs.remove(entry.path);
+    _tabs.open(entry);
+    await _showEditor();
+  }
+
+  /// Back to the editor with the open tabs.
+  Future<void> _showEditor() async {
+    if (_editorShown || _tabs.isEmpty) return;
+    _editorShown = true;
+    try {
+      await Navigator.of(context).push(MaterialPageRoute<bool>(builder: (_) => EditorScreen(tabs: _tabs)));
+    } finally {
+      _editorShown = false;
+    }
+    // Any open notebook may have changed: reload the previews.
+    _thumbs.clear();
     await _refresh();
   }
 
@@ -171,20 +194,13 @@ class _HomeScreenState extends State<HomeScreen> {
       case _ItemAction.rename:
         final name = await _askName(title: 'Rename', initial: entry.name, action: 'Rename');
         if (name == null) return;
-        await _guard(() async {
-          await lib.rename(entry, name);
-          _thumbs.remove(entry.path);
-          await _refresh();
-        });
+        await _guard(() => _relocate(entry, () => lib.rename(entry, name)));
       case _ItemAction.move:
         final target = await _pickFolder(entry);
         if (target == null) return;
-        await _guard(() async {
-          await lib.move(entry, target);
-          _thumbs.remove(entry.path);
-          await _refresh();
-        });
+        await _guard(() => _relocate(entry, () => lib.move(entry, target)));
       case _ItemAction.delete:
+        final open = _tabs.tabsWithin(entry).isNotEmpty;
         final ok = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
@@ -193,6 +209,11 @@ class _HomeScreenState extends State<HomeScreen> {
               (entry is FolderEntry
                       ? 'The folder and everything inside it will be deleted permanently.'
                       : 'The notebook will be deleted permanently.') +
+                  (open
+                      ? (entry is FolderEntry
+                            ? ' Its notebooks that are open in tabs are closed.'
+                            : ' Its open tab is closed.')
+                      : '') +
                   (widget.sync.isSignedIn ? '\n\nIts Google Drive backup is moved to the Drive trash.' : ''),
             ),
             actions: [
@@ -207,10 +228,25 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         if (ok != true) return;
         await _guard(() async {
+          _tabs.discard(entry);
           await lib.delete(entry);
           await _refresh();
         });
     }
+  }
+
+  /// Renames / moves [entry] with [change]. Open tabs inside it save first, let go of
+  /// their files and then follow it to the new location.
+  Future<void> _relocate(LibraryEntry entry, Future<LibraryEntry> Function() change) async {
+    await _tabs.releaseFiles(entry);
+    var to = entry.path;
+    try {
+      to = (await change()).path;
+    } finally {
+      _tabs.relocated(entry.path, to);
+    }
+    _thumbs.remove(entry.path);
+    await _refresh();
   }
 
   Future<String?> _askName({required String title, required String initial, String action = 'Create'}) {
@@ -307,6 +343,30 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
           actions: [
+            // Notebooks still open in editor tabs: one tap back to them.
+            ListenableBuilder(
+              listenable: _tabs,
+              builder: (context, _) {
+                final n = _tabs.length;
+                if (n == 0) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Tooltip(
+                    message: 'Back to your open notebooks',
+                    child: compact
+                        ? IconButton(
+                            onPressed: _showEditor,
+                            icon: Badge(label: Text('$n'), child: const Icon(Icons.tab_outlined)),
+                          )
+                        : FilledButton.tonalIcon(
+                            onPressed: _showEditor,
+                            icon: const Icon(Icons.tab_outlined),
+                            label: Text(n == 1 ? '1 open tab' : '$n open tabs'),
+                          ),
+                  ),
+                );
+              },
+            ),
             if (!compact)
               Padding(
                 padding: const EdgeInsets.only(right: 8),

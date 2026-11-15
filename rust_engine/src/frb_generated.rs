@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1125235197;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -558122130;
 
 // Section: executor
 
@@ -47,6 +47,65 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
+fn wire__crate__api__stroke_api__activate_document_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "activate_document",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_slot = <u32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::stroke_api::activate_document(api_slot))?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__stroke_api__active_document_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "active_document",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::stroke_api::active_document())?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__stroke_api__add_point_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -352,6 +411,38 @@ fn wire__crate__api__stroke_api__clear_selection_impl(
             transform_result_sse::<_, ()>((move || {
                 let output_ok = Ok::<_, ()>({
                     crate::api::stroke_api::clear_selection();
+                })?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__stroke_api__close_document_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "close_document",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_slot = <u32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>({
+                    crate::api::stroke_api::close_document(api_slot);
                 })?;
                 std::result::Result::Ok(output_ok)
             })())
@@ -840,12 +931,13 @@ fn wire__crate__api__stroke_api__export_to_pdf_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_slot = <u32>::sse_decode(&mut deserializer);
             let api_path = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::stroke_api::export_to_pdf(api_path)?;
+                        let output_ok = crate::api::stroke_api::export_to_pdf(api_slot, api_path)?;
                         std::result::Result::Ok(output_ok)
                     })(),
                 )
@@ -875,11 +967,12 @@ fn wire__crate__api__stroke_api__export_to_pdf_bytes_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_slot = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::stroke_api::export_to_pdf_bytes()?;
+                        let output_ok = crate::api::stroke_api::export_to_pdf_bytes(api_slot)?;
                         std::result::Result::Ok(output_ok)
                     })(),
                 )
@@ -1030,12 +1123,13 @@ fn wire__crate__api__stroke_api__import_pdf_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_slot = <u32>::sse_decode(&mut deserializer);
             let api_path = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::stroke_api::import_pdf(api_path)?;
+                        let output_ok = crate::api::stroke_api::import_pdf(api_slot, api_path)?;
                         std::result::Result::Ok(output_ok)
                     })(),
                 )
@@ -1099,14 +1193,18 @@ fn wire__crate__api__stroke_api__load_document_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_slot = <u32>::sse_decode(&mut deserializer);
             let api_path = <String>::sse_decode(&mut deserializer);
             let api_pdf_path = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok =
-                            crate::api::stroke_api::load_document(api_path, api_pdf_path)?;
+                        let output_ok = crate::api::stroke_api::load_document(
+                            api_slot,
+                            api_path,
+                            api_pdf_path,
+                        )?;
                         std::result::Result::Ok(output_ok)
                     })(),
                 )
@@ -1164,12 +1262,43 @@ fn wire__crate__api__stroke_api__new_document_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_slot = <u32>::sse_decode(&mut deserializer);
             let api_kind = <crate::document::page::DocumentKind>::sse_decode(&mut deserializer);
             let api_paper = <crate::document::paper::PaperStyle>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
-                let output_ok =
-                    Ok::<_, ()>(crate::api::stroke_api::new_document(api_kind, api_paper))?;
+                let output_ok = Ok::<_, ()>(crate::api::stroke_api::new_document(
+                    api_slot, api_kind, api_paper,
+                ))?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__stroke_api__open_documents_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "open_documents",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::stroke_api::open_documents())?;
                 std::result::Result::Ok(output_ok)
             })())
         },
@@ -1350,12 +1479,13 @@ fn wire__crate__api__stroke_api__save_document_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_slot = <u32>::sse_decode(&mut deserializer);
             let api_path = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::stroke_api::save_document(api_path)?;
+                        let output_ok = crate::api::stroke_api::save_document(api_slot, api_path)?;
                         std::result::Result::Ok(output_ok)
                     })(),
                 )
@@ -1877,6 +2007,18 @@ impl SseDecode for Vec<f32> {
     }
 }
 
+impl SseDecode for Vec<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<u32>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2318,17 +2460,17 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        26 => wire__crate__api__stroke_api__export_to_pdf_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__stroke_api__export_to_pdf_bytes_impl(
+        29 => wire__crate__api__stroke_api__export_to_pdf_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__stroke_api__export_to_pdf_bytes_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        32 => wire__crate__api__stroke_api__import_pdf_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__stroke_api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__stroke_api__load_document_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__stroke_api__save_document_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__stroke_api__import_pdf_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__stroke_api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__stroke_api__load_document_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__stroke_api__save_document_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2341,61 +2483,65 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => wire__crate__api__stroke_api__add_point_impl(ptr, rust_vec_len, data_len),
-        2 => wire__crate__api__stroke_api__add_points_impl(ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__stroke_api__append_page_impl(ptr, rust_vec_len, data_len),
-        4 => {
+        1 => wire__crate__api__stroke_api__activate_document_impl(ptr, rust_vec_len, data_len),
+        2 => wire__crate__api__stroke_api__active_document_impl(ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__stroke_api__add_point_impl(ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__stroke_api__add_points_impl(ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__stroke_api__append_page_impl(ptr, rust_vec_len, data_len),
+        6 => {
             wire__crate__api__stroke_api__append_page_if_near_end_impl(ptr, rust_vec_len, data_len)
         }
-        5 => wire__crate__api__stroke_api__begin_history_group_impl(ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__stroke_api__begin_stroke_impl(ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__stroke_api__can_redo_impl(ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__stroke_api__can_undo_impl(ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__stroke_api__cancel_stroke_impl(ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__stroke_api__clear_selection_impl(ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__stroke_api__content_bounds_impl(ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__stroke_api__copy_selection_impl(ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__stroke_api__create_sticky_note_impl(ptr, rust_vec_len, data_len),
-        14 => {
+        7 => wire__crate__api__stroke_api__begin_history_group_impl(ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__stroke_api__begin_stroke_impl(ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__stroke_api__can_redo_impl(ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__stroke_api__can_undo_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__stroke_api__cancel_stroke_impl(ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__stroke_api__clear_selection_impl(ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__stroke_api__close_document_impl(ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__stroke_api__content_bounds_impl(ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__stroke_api__copy_selection_impl(ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__stroke_api__create_sticky_note_impl(ptr, rust_vec_len, data_len),
+        17 => {
             wire__crate__api__stroke_api__current_stroke_preview_impl(ptr, rust_vec_len, data_len)
         }
-        15 => wire__crate__api__stroke_api__cut_selection_impl(ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__stroke_api__delete_items_impl(ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__stroke_api__delete_selection_impl(ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__stroke_api__detect_shape_impl(ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__stroke_api__document_info_impl(ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__stroke_api__document_pages_impl(ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__stroke_api__document_revision_impl(ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__stroke_api__duplicate_selection_impl(ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__stroke_api__end_history_group_impl(ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__stroke_api__erase_along_impl(ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__stroke_api__erase_at_impl(ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__stroke_api__finish_stroke_impl(ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__stroke_api__get_scene_impl(ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__stroke_api__get_selection_impl(ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__stroke_api__has_clipboard_impl(ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__stroke_api__max_page_count_impl(ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__stroke_api__new_document_impl(ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__stroke_api__page_count_impl(ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__stroke_api__paper_spec_impl(ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__stroke_api__paste_clipboard_impl(ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__stroke_api__redo_impl(ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__stroke_api__reset_document_impl(ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__stroke_api__select_at_impl(ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__stroke_api__select_in_lasso_impl(ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__stroke_api__select_in_region_impl(ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__stroke_api__set_export_font_impl(ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__stroke_api__set_paper_style_impl(ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__stroke_api__set_selection_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__stroke_api__sticky_note_at_impl(ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__stroke_api__transform_selection_impl(ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__stroke_api__trim_trailing_blank_pages_impl(
+        18 => wire__crate__api__stroke_api__cut_selection_impl(ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__stroke_api__delete_items_impl(ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__stroke_api__delete_selection_impl(ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__stroke_api__detect_shape_impl(ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__stroke_api__document_info_impl(ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__stroke_api__document_pages_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__stroke_api__document_revision_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__stroke_api__duplicate_selection_impl(ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__stroke_api__end_history_group_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__stroke_api__erase_along_impl(ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__stroke_api__erase_at_impl(ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__stroke_api__finish_stroke_impl(ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__stroke_api__get_scene_impl(ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__stroke_api__get_selection_impl(ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__stroke_api__has_clipboard_impl(ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__stroke_api__max_page_count_impl(ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__stroke_api__new_document_impl(ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__stroke_api__open_documents_impl(ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__stroke_api__page_count_impl(ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__stroke_api__paper_spec_impl(ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__stroke_api__paste_clipboard_impl(ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__stroke_api__redo_impl(ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__stroke_api__reset_document_impl(ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__stroke_api__select_at_impl(ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__stroke_api__select_in_lasso_impl(ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__stroke_api__select_in_region_impl(ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__stroke_api__set_export_font_impl(ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__stroke_api__set_paper_style_impl(ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__stroke_api__set_selection_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__stroke_api__sticky_note_at_impl(ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__stroke_api__transform_selection_impl(ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__stroke_api__trim_trailing_blank_pages_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        52 => wire__crate__api__stroke_api__undo_impl(ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__stroke_api__update_sticky_note_impl(ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__stroke_api__undo_impl(ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__stroke_api__update_sticky_note_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -3030,6 +3176,16 @@ impl SseEncode for Vec<f32> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <f32>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <u32>::sse_encode(item, serializer);
         }
     }
 }

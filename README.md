@@ -14,6 +14,7 @@ easynotes/
 │       ├── spatial/                quadtree.rs, hit_test.rs, transform.rs (bbox scale/drag, page clamps)
 │       ├── document/               Engine (mod.rs): strokes, notes, selection, clipboard, revisions
 │       │   ├── history.rs          undo / redo (per-item before / after snapshots)
+│       │   ├── workspace.rs        several open documents (editor tabs), one active at a time
 │       │   ├── page.rs             1000 × 1000 pages, vertical stacking, DocumentKind
 │       │   ├── eraser.rs           stroke eraser + partial ("classic") eraser that cuts strokes
 │       │   ├── pdf_importer.rs     PDF page tree → page backgrounds (lopdf)
@@ -28,7 +29,7 @@ easynotes/
         ├── widgets/                draggable_toolbar.dart, canvas_status_bar.dart, editor_app_bar.dart,
         │                           sync_widgets.dart (account button, backup status chip)
         └── src/
-            ├── editor/             EditorController (engine calls, open/autosave), tools
+            ├── editor/             EditorController (engine calls, open/autosave), OpenNotebooks (tabs), tools
             ├── canvas/             NoteCanvas (input), painters (pages, PDF layer, ink), viewport, scene cache
             ├── services/           library (folders/notebooks on disk), PDF rasteriser (pdfrx), export/share
             ├── sync/               Google sign-in (google_auth, session_store), Drive backup
@@ -43,6 +44,13 @@ easynotes/
   - The **New** menu creates a *Ruled Notebook*, a *Grid Notebook*, a *Blank Whiteboard* or a *New Folder*. **Import PDF…** creates an annotation notebook.
   - Each card has *Rename*, *Move to…* and *Delete*, via the ⋮ button, a long press or a right-click.
   - Notebooks autosave, and their card shows a thumbnail of the first page.
+- **Tabs.** Several notebooks and whiteboards stay open at once, as tabs in the editor's top bar (title and ×; a middle click closes too).
+  - Clicking a tab, or Ctrl+Tab / Ctrl+Shift+Tab, switches instantly. The tab left behind saves its edits and keeps its undo history, selection, scroll position and tools.
+  - **+** lists the most recently edited notebooks of the whole library and opens one in a new tab, or jumps to its tab if it is open already.
+  - **Home** (and the back button / gesture) returns to the library and keeps the tabs open. Opening a notebook from the library adds a tab, and *N open tabs* in the library's top bar goes straight back.
+  - Closing a tab saves it, drops its blank trailing pages and refreshes its thumbnail. Closing the last one returns to the library.
+  - Renaming or moving a notebook (or its folder) in the library moves its open tab along. Deleting it closes the tab.
+  - The clipboard is shared, so you can copy in one tab and paste in another.
 - **Pages.** Notebook pages are exactly 1000 × 1000 units, stacked with no gap (page *n* spans y ∈ [1000·n, 1000·(n+1))).
   - **Continuous pages.** Any downward scroll (touch, trackpad, pinch, mouse wheel) that brings the bottom of the view within 50 units of the end of the last page (`Y ≥ N·1000 − 50`) appends page N+1 directly beneath it, one page per scroll step.
   - The pen does the same: writing into the last 50 units of the last page opens the next page under it.
@@ -56,7 +64,7 @@ easynotes/
 - **PDF annotation.** Imported PDFs become one page per PDF page: 1000 units wide, keeping the PDF page's aspect ratio.
   - PDFium (via `pdfrx`) renders each page as the background layer at a resolution that follows the zoom.
   - Exporting re-embeds the original pages as **vector Form XObjects** under the annotations, so text stays selectable and nothing is rasterised. MediaBox/CropBox/Rotate inheritance is handled.
-- **Instant shape snap** (the auto-correct toggle in the top bar). On pen-up, Rust replaces strokes that look like a shape with clean geometry:
+- **Instant shape snap** (the magic-wand auto-correct toggle in the top bar, **off** whenever a notebook opens). Once switched on, Rust replaces strokes that look like a shape with clean geometry on pen-up:
   - **Straight line**: an open stroke at least 48 units long whose samples all stay within 4.5 % of its length from the start–end chord. Lines within 5° of horizontal / vertical become exact.
   - **Circle / ellipse**: the loop's area moments define the ellipse; every sample must lie close to it, the traced length must match its perimeter and there must be no sharp corner. Aspect ratios within 15 % of 1:1 make a circle.
   - **Polygons** from Ramer–Douglas–Peucker corners, with sides that must be straight (and no straighter-than-the-corners curves):
@@ -83,15 +91,14 @@ easynotes/
   - zoom;
   - the pan offsets (`X`/`Y` = world point at the top-left of the free canvas area, `0 0` at the top of page 1);
   - `Page X / Y`, which updates live while scrolling and as pages are appended;
-  - a tool hint;
-  - the backup status (*Synced*, *Syncing…*, *Pending*, *Offline*, *Local only*).
+  - on the right, only the backup status (*Synced*, *Syncing…*, *Pending*, *Offline*, *Local only*).
 
   Tapping the bar (or Ctrl+0) **only** resets the zoom to 100%. The vertical offset is kept, and so is the horizontal one unless the whole page width fits at 100%, in which case the page is centred.
 - **Google account & Drive backup.** "Sign in with Google" sits in the top-right corner of the library. Once signed in, the avatar shows the backup status, and its menu offers *Back up now* and *Sign out*.
   - Saving stays local and instant, exactly as before.
   - The library is pushed to `My Drive › EasyNotes/` in the background:
     - every 3 minutes;
-    - when a notebook is closed;
+    - when a tab is closed or the library is shown;
     - after rename / move / delete;
     - when the app is hidden;
     - before a desktop window closes (bounded to 15 s, after open notebooks save).
@@ -112,13 +119,15 @@ easynotes/
   - Moves and resizes store only the stroke's transform matrices, not point copies.
   - Gestures made of many FFI calls (an eraser drag, placing a sticky note and editing its text) are merged with `begin_history_group` / `end_history_group`. A note that is placed and then cancelled leaves no step at all.
   - `undo()` / `redo()` return the `SceneDelta` to apply, and Flutter puts restored items back at their z-position.
+  - Each open document has its own history: undo in one tab never touches another.
   - Pages and the paper style are not part of the history: pages appended for content stay (unused trailing pages are still trimmed on close), and a redo appends pages again if needed.
+- **Open documents as slots.** The engine edits one document at a time. Each open tab owns a *slot* in `document/workspace.rs`, and switching tabs moves the engines (`activate_document`), so a 500-page notebook switches as fast as an empty one. Parked documents keep everything, even an unfinished stroke. Every synchronous call of a tab's `EditorController` first points the engine at its slot, so a background tab's autosave can never write into the visible one. The async calls (load, import, save, export) run later on a worker thread and name their slot explicitly.
 - **Rust is authoritative for layout.** `DocumentInfo.pages` (top, height, `pdf_page`) drives the Flutter painter, the viewport extent and the PDF exporter. Paper patterns restart at each page's top, identically on screen and in the PDF.
 - **Persistence.** A notebook is a folder `Name.enote/` containing:
   - `content.ezn`: the engine document, `EZNOTE\x01\n` + zlib(JSON). Enums are stored as strings and coordinates rounded to 0.01. It is written atomically (temp file + rename).
   - `background.pdf`, `meta.json` and `thumb.png`.
 
-  Folders are plain directories under `Documents/EasyNotes`. Saves are debounced 2 s after the last edit; leaving the editor, backgrounding the app or Ctrl+S save immediately. A revision counter in the engine tracks what is dirty.
+  Folders are plain directories under `Documents/EasyNotes`. Saves are debounced 2 s after the last edit; switching or closing a tab, going Home, backgrounding the app or Ctrl+S save immediately. A revision counter in the engine tracks what is dirty.
 - **Export page sizes.** Notebook pages export as 750 × 750 pt (1 unit = 0.75 pt, so the 5 mm grid stays 5 mm on paper). PDF-backed pages keep the source size, and blank pages appended after them reuse that scale. Whiteboards are cut into A-series pages covering the content.
 
 ## Input model
@@ -130,7 +139,7 @@ easynotes/
 | Finger | Stylus-only on: one finger pans, two fingers pinch-zoom. Stylus-only off: one finger draws, two fingers navigate. Toggle in the top bar. |
 | Finger / pen on selection | Drag inside the box to move it, drag a corner handle to resize (Shift keeps the ratio). |
 | Mouse | Left button draws. Right/middle drag pans. Wheel scrolls (Shift = horizontal; reaching the end of the last page appends one); Ctrl+wheel zooms. Trackpad pinch zooms. |
-| Keyboard | Ctrl+Z (undo), Ctrl+Y / Ctrl+Shift+Z (redo), Ctrl+C / X / V / D, Del, Esc, Ctrl+S (save), Ctrl+0 (reset zoom); Cmd instead of Ctrl on macOS |
+| Keyboard | Ctrl+Z (undo), Ctrl+Y / Ctrl+Shift+Z (redo), Ctrl+C / X / V / D, Del, Esc, Ctrl+S (save), Ctrl+0 (reset zoom), Ctrl+Tab / Ctrl+Shift+Tab (next / previous tab); Cmd instead of Ctrl on macOS, except for the tab keys |
 
 ## Running it
 
@@ -180,9 +189,9 @@ How the sign-in works on each platform:
 Tests:
 
 ```bash
-cd rust_engine && cargo test                                  # 93 engine unit tests (add --release for the timing assert)
-cd flutter_app && flutter test                                # viewport/paging (bugs A/B), library, toolbar, Drive backup + sync (fake Drive)
-cd flutter_app && flutter test integration_test -d windows    # end-to-end through the FFI bridge, incl. the editor
+cd rust_engine && cargo test                                  # 97 engine unit tests (add --release for the timing assert)
+cd flutter_app && flutter test                                # viewport/paging, library, toolbar, editor chrome, Drive backup + sync (fake Drive)
+cd flutter_app && flutter test integration_test -d windows    # end-to-end through the FFI bridge, incl. the editor, tabs and library
 ```
 
 `pdfrx` builds a small C helper through Dart native assets. `native_toolchain_c` ≥ 0.19.6 is needed when the pub cache path contains spaces (`C:\Users\First Last\...`); the lock file pins it.

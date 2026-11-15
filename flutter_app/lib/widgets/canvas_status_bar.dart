@@ -3,14 +3,13 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../src/editor/editor_controller.dart';
-import '../src/editor/tools.dart';
 import '../src/sync/sync_service.dart';
 import 'sync_widgets.dart';
 
 /// Bottom status bar: zoom, pan coordinates (`X`, `Y` = world point at the top-left of
 /// the free canvas area, `0, 0` at the top of page 1), the current page out of the page
-/// count (updates live while scrolling and as pages are appended), a hint for the active
-/// tool and the cloud backup status.
+/// count (updates live while scrolling and as pages are appended) and, on the right, the
+/// cloud backup status only.
 ///
 /// Tapping it **only** resets the zoom to 100 %: the pan offsets are kept as they are
 /// ([Viewport.resetZoom]), so the view never jumps back to (0, 0).
@@ -28,7 +27,6 @@ class CanvasStatusBar extends StatelessWidget {
       color: Colors.white70,
       fontFeatures: const [FontFeature.tabularFigures()],
     );
-    final dim = text?.copyWith(color: Colors.white38);
     final sync = this.sync;
     return ListenableBuilder(
       listenable: Listenable.merge([controller, controller.viewport]),
@@ -63,17 +61,8 @@ class CanvasStatusBar extends StatelessWidget {
                         const _Dot(),
                         Text('Page ${page + 1} / ${controller.pages.length}', style: text),
                       ],
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Text(
-                          toolHint(controller.tool, controller.eraserMode),
-                          style: dim,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.right,
-                        ),
-                      ),
-                      if (sync != null) ...[const _Dot(), SyncStatusChip(sync: sync)],
+                      const Spacer(),
+                      if (sync != null) SyncStatusChip(sync: sync),
                     ],
                   ),
                 ),

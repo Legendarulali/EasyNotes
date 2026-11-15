@@ -513,12 +513,20 @@ class _NoteCanvasState extends State<NoteCanvas> {
             children: [
               MouseRegion(
                 cursor: _cursor,
+                // A pointer that went down before a tab switch keeps reporting to this (then
+                // disposed) canvas: those late events must not edit the hidden notebook.
                 child: Listener(
                   behavior: HitTestBehavior.opaque,
                   onPointerDown: _onDown,
-                  onPointerMove: _onMove,
-                  onPointerUp: _onUp,
-                  onPointerCancel: _onCancel,
+                  onPointerMove: (e) {
+                    if (mounted) _onMove(e);
+                  },
+                  onPointerUp: (e) {
+                    if (mounted) _onUp(e);
+                  },
+                  onPointerCancel: (e) {
+                    if (mounted) _onCancel(e);
+                  },
                   onPointerHover: _onHover,
                   onPointerSignal: _onSignal,
                   onPointerPanZoomStart: _onPanZoomStart,

@@ -69,6 +69,36 @@ void main() {
       );
     });
 
+    test('path helpers follow notebooks through renames and moves (open tabs)', () async {
+      final sep = Platform.pathSeparator;
+      final folder = await lib.createFolder(tmp, 'Course');
+      final nb = await lib.createNotebook(folder.dir, 'Week 1', NotebookTemplate.ruled);
+      expect(LibraryService.samePath(nb.path, '${nb.path}$sep'), isTrue);
+      expect(LibraryService.isWithin(nb.path, nb.path), isTrue);
+      expect(LibraryService.isWithin(nb.path, folder.path), isTrue);
+      expect(LibraryService.isWithin(folder.path, nb.path), isFalse);
+      // "Course 2" starts with "Course" but is not inside it.
+      final sibling = await lib.createFolder(tmp, 'Course 2');
+      expect(LibraryService.isWithin(sibling.path, folder.path), isFalse);
+
+      final renamed = await lib.rename(folder, 'Semester');
+      final moved = LibraryService.rebase(nb.path, folder.path, renamed.path)!;
+      expect(await Directory(moved).exists(), isTrue, reason: 'the notebook moved along with its folder');
+      expect(LibraryService.samePath(moved, '${renamed.path}${sep}Week 1$kNotebookExtension'), isTrue);
+      expect(LibraryService.rebase(sibling.path, folder.path, renamed.path), isNull);
+    });
+
+    test('recent notebooks span every folder, newest first', () async {
+      final folder = await lib.createFolder(tmp, 'Deep');
+      final old = await lib.createNotebook(tmp, 'Old', NotebookTemplate.ruled);
+      final fresh = await lib.createNotebook(folder.dir, 'Fresh', NotebookTemplate.grid);
+      await lib.writeMeta(old, old.meta.copyWith(modified: DateTime(2020)));
+      await lib.writeMeta(fresh, fresh.meta.copyWith(modified: DateTime(2030)));
+      final recent = await lib.recentNotebooks();
+      expect(recent.map((e) => e.name), ['Fresh', 'Old']);
+      expect(await lib.recentNotebooks(limit: 1), hasLength(1));
+    });
+
     test('settings persist', () async {
       await lib.updateSettings({'toolbarDock': 'left'});
       await lib.updateSettings({'other': 1});

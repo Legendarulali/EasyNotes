@@ -8,6 +8,7 @@ import '../src/canvas/painters.dart';
 import '../src/canvas/scene_cache.dart';
 import '../src/canvas/viewport.dart' as canvas;
 import '../src/editor/editor_controller.dart';
+import '../src/editor/open_notebooks.dart';
 import '../src/rust/geometry/sticky_note.dart';
 import '../src/services/library_service.dart';
 import '../src/services/pdf_export_service.dart';
@@ -17,66 +18,117 @@ import '../widgets/canvas_status_bar.dart';
 import '../widgets/draggable_toolbar.dart';
 import '../widgets/editor_app_bar.dart';
 
-/// One open notebook: dark chrome, page canvas, floating toolbar and status bar.
-/// Edits autosave; leaving the screen (back button / gesture) saves and refreshes the
-/// library thumbnail first.
+/// The editor: dark chrome with the tabs of the open notebooks, then the active
+/// notebook's page canvas, floating toolbar and status bar. Edits autosave. Home (or the
+/// back button / gesture) saves every tab and returns to the library, where the tabs stay
+/// open; closing the last tab returns there too.
 class EditorScreen extends StatefulWidget {
-  const EditorScreen({super.key, required this.entry, required this.library, required this.sync});
+  const EditorScreen({super.key, required this.tabs});
 
-  final NotebookEntry entry;
-  final LibraryService library;
-
-  /// Cloud backup: the notebook is uploaded when the editor closes.
-  final SyncService sync;
+  final OpenNotebooks tabs;
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
 }
 
 class _EditorScreenState extends State<EditorScreen> {
-  late final EditorController c = EditorController(entry: widget.entry, library: widget.library)
-    ..onMessage = _toast
-    ..onSaved = widget.sync.markPending;
+  OpenNotebooks get tabs => widget.tabs;
+  LibraryService get library => tabs.library;
+
+  /// Cloud backup: notebooks are uploaded when a tab closes and when the library is shown.
+  SyncService get sync => tabs.sync;
+
   late final AppLifecycleListener _lifecycle;
   ToolbarPlacement _placement = ToolbarPlacement.initial;
+
+  /// Canvas band behind the docked toolbar; every tab's viewport keeps clear of it.
+  EdgeInsets? _toolbarBand;
+  EditorController? _shown;
   bool _exporting = false;
   bool _leaving = false;
 
   @override
   void initState() {
     super.initState();
-    // Hiding / exiting the app runs SyncService.flush(), which awaits this saver before
-    // uploading; pause / detach (mobile) save directly.
+    // Hiding / exiting the app runs SyncService.flush(), which awaits every tab's saver
+    // before uploading; pause / detach (mobile) save directly.
     _lifecycle = AppLifecycleListener(onPause: _saveQuietly, onDetach: _saveQuietly);
-    widget.sync.registerSaver(this, () => c.save(thumbnail: true));
-    c.open();
-    widget.library.readSettings().then((s) {
+    tabs.onMessage = _toast;
+    tabs.addListener(_onTabsChanged);
+    _shown = tabs.active?..resume();
+    library.readSettings().then((s) {
       if (mounted) setState(() => _placement = ToolbarPlacement.fromJson(s));
     });
   }
 
   @override
+  void didUpdateWidget(EditorScreen old) {
+    super.didUpdateWidget(old);
+    if (old.tabs != widget.tabs) {
+      old.tabs.removeListener(_onTabsChanged);
+      if (old.tabs.onMessage == _toast) old.tabs.onMessage = null;
+      widget.tabs
+        ..addListener(_onTabsChanged)
+        ..onMessage = _toast;
+    }
+  }
+
+  @override
   void dispose() {
-    widget.sync.unregisterSaver(this);
+    tabs.removeListener(_onTabsChanged);
+    if (tabs.onMessage == _toast) tabs.onMessage = null;
     _lifecycle.dispose();
-    c.dispose();
     super.dispose();
   }
 
-  void _saveQuietly() => c.save(thumbnail: true);
+  void _saveQuietly() => unawaited(tabs.saveAll());
 
-  Future<void> _leave() async {
+  void _onTabsChanged() {
+    if (!mounted) return;
+    final c = tabs.active;
+    if (c != null && !identical(c, _shown)) {
+      _shown = c;
+      final band = _toolbarBand;
+      if (band != null) c.viewport.setInsets(canvas.Viewport.insetsFor(band));
+    }
+    setState(() {});
+  }
+
+  /// Back to the library, keeping every tab open (their edits are written first).
+  Future<void> _goHome() async {
     if (_leaving) return;
     _leaving = true;
-    await c.close();
-    // Notebook closed: push it to Google Drive in the background.
-    unawaited(widget.sync.syncNow());
-    if (mounted) Navigator.of(context).pop(true);
+    try {
+      await tabs.active?.suspend(thumbnail: true);
+      await tabs.saveAll();
+      unawaited(sync.syncNow());
+      if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop(true);
+    } finally {
+      _leaving = false;
+    }
+  }
+
+  /// Closes a tab (saving it); closing the last one returns to the library.
+  Future<void> _closeTab(EditorController c) async {
+    final last = tabs.length == 1;
+    if (last) {
+      if (_leaving) return;
+      _leaving = true;
+    }
+    try {
+      await tabs.close(c);
+      if (last && mounted && Navigator.of(context).canPop()) Navigator.of(context).pop(true);
+    } finally {
+      if (last) _leaving = false;
+    }
   }
 
   /// The docked toolbar covers part of the canvas: keep page 1 (and the page edges) out
   /// from under it.
-  void _onToolbarObstruction(EdgeInsets band) => c.viewport.setInsets(canvas.Viewport.insetsFor(band));
+  void _onToolbarObstruction(EdgeInsets band) {
+    _toolbarBand = band;
+    tabs.active?.viewport.setInsets(canvas.Viewport.insetsFor(band));
+  }
 
   void _toast(String message, {SnackBarAction? action}) {
     if (!mounted) return;
@@ -86,14 +138,14 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   /// World coordinate at the centre of the visible canvas (paste target).
-  Offset _viewportCenterWorld() {
+  Offset _viewportCenterWorld(EditorController c) {
     final size = c.viewport.size;
     return c.viewport.screenToWorld(size.center(Offset.zero));
   }
 
-  void _paste() => c.pasteAt(_viewportCenterWorld());
+  void _paste(EditorController c) => c.pasteAt(_viewportCenterWorld(c));
 
-  Future<void> _editNote(StickyNote note, {bool isNew = false}) async {
+  Future<void> _editNote(EditorController c, StickyNote note, {bool isNew = false}) async {
     final result = await showStickyNoteEditor(context, note);
     if (!mounted) return;
     final current = c.scene.note(note.id) ?? note;
@@ -108,7 +160,7 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
-  Future<void> _confirmClear() async {
+  Future<void> _confirmClear(EditorController c) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -126,7 +178,7 @@ class _EditorScreenState extends State<EditorScreen> {
     if (ok == true) c.clearPage();
   }
 
-  Future<void> _export() async {
+  Future<void> _export(EditorController c) async {
     setState(() => _exporting = true);
     try {
       final path = await nextExportPath(baseName: c.title);
@@ -151,10 +203,13 @@ class _EditorScreenState extends State<EditorScreen> {
 
   void _onPlacementChanged(ToolbarPlacement p) {
     _placement = p;
-    widget.library.updateSettings(p.toJson());
+    library.updateSettings(p.toJson());
   }
 
-  Map<ShortcutActivator, VoidCallback> get _shortcuts => {
+  Map<ShortcutActivator, VoidCallback> _shortcuts(EditorController c) => {
+    // Tabs: Ctrl+Tab / Ctrl+Shift+Tab cycle through the open notebooks.
+    const SingleActivator(LogicalKeyboardKey.tab, control: true): () => tabs.cycle(1),
+    const SingleActivator(LogicalKeyboardKey.tab, control: true, shift: true): () => tabs.cycle(-1),
     // Undo / redo (holding the keys repeats them).
     const SingleActivator(LogicalKeyboardKey.keyZ, control: true): c.undo,
     const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): c.undo,
@@ -165,8 +220,8 @@ class _EditorScreenState extends State<EditorScreen> {
     const SingleActivator(LogicalKeyboardKey.keyC, meta: true): c.copySelection,
     const SingleActivator(LogicalKeyboardKey.keyX, control: true): c.cutSelection,
     const SingleActivator(LogicalKeyboardKey.keyX, meta: true): c.cutSelection,
-    const SingleActivator(LogicalKeyboardKey.keyV, control: true): _paste,
-    const SingleActivator(LogicalKeyboardKey.keyV, meta: true): _paste,
+    const SingleActivator(LogicalKeyboardKey.keyV, control: true): () => _paste(c),
+    const SingleActivator(LogicalKeyboardKey.keyV, meta: true): () => _paste(c),
     const SingleActivator(LogicalKeyboardKey.keyD, control: true): c.duplicateSelection,
     const SingleActivator(LogicalKeyboardKey.keyD, meta: true): c.duplicateSelection,
     const SingleActivator(LogicalKeyboardKey.keyS, control: true): () => c.save(),
@@ -179,13 +234,14 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final c = tabs.active;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _leave();
+        if (!didPop) _goHome();
       },
       child: CallbackShortcuts(
-        bindings: _shortcuts,
+        bindings: c == null ? const {} : _shortcuts(c),
         child: Focus(
           autofocus: true,
           child: Scaffold(
@@ -193,18 +249,29 @@ class _EditorScreenState extends State<EditorScreen> {
             body: Column(
               children: [
                 EditorAppBar(
-                  controller: c,
-                  onBack: _leave,
-                  onPaste: _paste,
-                  onClear: _confirmClear,
-                  onExport: _export,
+                  tabs: tabs,
+                  onHome: _goHome,
+                  onCloseTab: _closeTab,
+                  // The document actions are only shown while a tab is active.
+                  onPaste: () {
+                    if (c != null) _paste(c);
+                  },
+                  onClear: () {
+                    if (c != null) _confirmClear(c);
+                  },
+                  onExport: () {
+                    if (c != null) _export(c);
+                  },
                   exporting: _exporting,
                 ),
                 Expanded(
-                  child: ListenableBuilder(
-                    listenable: c,
-                    builder: (context, _) => _body(),
-                  ),
+                  // No tab: the last one is closing, the library comes back in a moment.
+                  child: c == null
+                      ? const SizedBox.expand()
+                      : ListenableBuilder(
+                          listenable: c,
+                          builder: (context, _) => _body(c),
+                        ),
                 ),
               ],
             ),
@@ -214,7 +281,7 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  Widget _body() {
+  Widget _body(EditorController c) {
     if (c.openError != null) {
       return Center(
         child: Padding(
@@ -228,7 +295,7 @@ class _EditorScreenState extends State<EditorScreen> {
               const SizedBox(height: 8),
               Text('${c.openError}', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60)),
               const SizedBox(height: 16),
-              FilledButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Back')),
+              FilledButton(onPressed: () => _closeTab(c), child: const Text('Close tab')),
             ],
           ),
         ),
@@ -248,7 +315,13 @@ class _EditorScreenState extends State<EditorScreen> {
                 right: 0,
                 bottom: CanvasStatusBar.height,
                 child: ClipRect(
-                  child: NoteCanvas(controller: c, onEditNote: _editNote, onMessage: _toast),
+                  // A tab switch starts a fresh canvas: no gesture carries over.
+                  child: NoteCanvas(
+                    key: ObjectKey(c),
+                    controller: c,
+                    onEditNote: (note, {isNew = false}) => _editNote(c, note, isNew: isNew),
+                    onMessage: _toast,
+                  ),
                 ),
               ),
               Positioned(
@@ -268,7 +341,7 @@ class _EditorScreenState extends State<EditorScreen> {
                   ],
                 ),
               ),
-              Positioned(left: 0, right: 0, bottom: 0, child: CanvasStatusBar(controller: c, sync: widget.sync)),
+              Positioned(left: 0, right: 0, bottom: 0, child: CanvasStatusBar(controller: c, sync: sync)),
             ],
           );
         },

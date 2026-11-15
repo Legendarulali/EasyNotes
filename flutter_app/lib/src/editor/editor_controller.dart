@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Directory;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -94,6 +95,10 @@ class LiveLayer extends ChangeNotifier {
 /// UI state of one open notebook + the bridge to the Rust engine. Every document
 /// mutation goes through the engine and comes back as a render / [SceneDelta] that
 /// patches [scene]. Edits are autosaved (debounced) into the notebook bundle.
+///
+/// Several controllers can be open at once (editor tabs). Each owns an engine *slot*; the
+/// engine edits one document at a time, so every engine call here first points it at this
+/// notebook ([_bind]), and the async ones (load, save, export) name the slot explicitly.
 class EditorController extends ChangeNotifier {
   EditorController({required this._entry, required this.library}) {
     PencilGrain.ensureLoaded().then((_) {
@@ -104,8 +109,17 @@ class EditorController extends ChangeNotifier {
 
   static const Duration autosaveDelay = Duration(seconds: 2);
 
+  /// Slot 0 is the engine's scratch document; tabs count up from 1.
+  static int _nextSlot = 1;
+
   final LibraryService library;
   NotebookEntry _entry;
+
+  /// This notebook's document in the engine ([engine.activateDocument]).
+  final int _slot = _nextSlot++;
+
+  /// [open] put a document into the engine ([dispose] frees it).
+  bool _started = false;
 
   final SceneCache scene = SceneCache();
   final Viewport viewport = Viewport();
@@ -126,10 +140,12 @@ class EditorController extends ChangeNotifier {
   DocumentKind _kind = DocumentKind.notebook;
   List<CanvasPage> _pages = const [];
   PdfBackgrounds? _pdf;
+  int _pdfPageCount = 0;
   bool _opened = false;
   Object? _openError;
   bool _initialFitPending = false;
   int _savedRevision = -1;
+  int _thumbnailRevision = -1;
   Future<void> _saveChain = Future.value();
   Timer? _autosave;
   bool _disposed = false;
@@ -150,7 +166,8 @@ class EditorController extends ChangeNotifier {
     marginX: 0,
     marginColor: 0,
   );
-  bool _autoCorrect = true;
+  /// Shape snapping is opt-in: every notebook opens with it off (magic-wand toggle).
+  bool _autoCorrect = false;
   bool _stylusOnly = false;
   bool _stylusDetected = false;
 
@@ -205,26 +222,34 @@ class EditorController extends ChangeNotifier {
 
   // ------------------------------------------------------------------ lifecycle
 
-  /// Loads the notebook into the engine (or creates / imports it the first time).
+  /// Loads the notebook into the engine (or creates / imports it the first time) and makes
+  /// it the document the engine works on.
   Future<void> open() async {
+    _started = true;
     try {
       final doc = _entry.documentFile;
       final pdfFile = _entry.isPdf ? _entry.pdfFile : null;
       final exists = await doc.exists();
       final DocumentInfo info;
       if (exists) {
-        info = await engine.loadDocument(path: doc.path, pdfPath: pdfFile?.path);
+        info = await engine.loadDocument(slot: _slot, path: doc.path, pdfPath: pdfFile?.path);
       } else if (pdfFile != null) {
-        info = await engine.importPdf(path: pdfFile.path);
+        info = await engine.importPdf(slot: _slot, path: pdfFile.path);
       } else {
-        info = engine.newDocument(kind: _entry.meta.kind, paper: _entry.meta.paper);
+        info = engine.newDocument(slot: _slot, kind: _entry.meta.kind, paper: _entry.meta.paper);
       }
-      if (_disposed) return;
+      if (_disposed) {
+        // The tab was closed while loading: the load finished afterwards, free it again.
+        engine.closeDocument(slot: _slot);
+        return;
+      }
+      engine.activateDocument(slot: _slot);
       _applyInfo(info);
       _savedRevision = exists ? info.revision : -1;
-      loadScene();
+      _loadScene();
       _hasClipboard = engine.hasClipboard();
-      if (pdfFile != null && info.pdfPageCount > 0) {
+      _pdfPageCount = info.pdfPageCount;
+      if (pdfFile != null && _pdfPageCount > 0) {
         _pdf = PdfBackgrounds(pdfFile.path)..open();
       }
       _opened = true;
@@ -233,6 +258,63 @@ class EditorController extends ChangeNotifier {
       _openError = e;
     }
     if (!_disposed) notifyListeners();
+  }
+
+  /// Points the engine at this notebook. `false` until it is open (and after disposal).
+  /// Every synchronous engine call is preceded by it: another tab may have used the engine
+  /// in between (a background autosave, closing a tab).
+  bool _bind() => _opened && !_disposed && engine.activateDocument(slot: _slot);
+
+  /// The tab became visible: the engine works on this notebook again, and the clipboard
+  /// (shared by all tabs) may have changed meanwhile.
+  void resume() {
+    if (!_bind()) return;
+    _hasClipboard = engine.hasClipboard();
+    _refreshHistory();
+    notifyListeners();
+  }
+
+  /// The tab is being hidden (another tab or the library takes over): drops what an
+  /// in-flight gesture was previewing, closes an open undo group and writes pending edits.
+  /// Undo history, selection, viewport and tools stay as they are.
+  Future<void> suspend({bool thumbnail = false}) {
+    if (_bind()) {
+      engine.cancelStroke();
+      engine.endHistoryGroup();
+      _refreshHistory();
+    }
+    live.clear();
+    selectionPreview.value = null;
+    notePreview.value = null;
+    return save(thumbnail: thumbnail);
+  }
+
+  /// Before the library renames or moves this notebook (or a folder containing it): writes
+  /// pending edits and lets go of the imported PDF (Windows cannot rename a folder while a
+  /// file inside it is open). Follow up with [relocate].
+  Future<void> releaseFiles() async {
+    await save(thumbnail: true);
+    _pdf?.dispose();
+    _pdf = null;
+  }
+
+  /// The notebook now lives in [dir] (after a rename / move; pass the old folder if that
+  /// failed). Reopens the PDF released by [releaseFiles].
+  void relocate(Directory dir) {
+    if (_disposed) return;
+    _entry = NotebookEntry(dir, _entry.meta);
+    if (_opened && _entry.isPdf && _pdfPageCount > 0 && _pdf == null) {
+      _pdf = PdfBackgrounds(_entry.pdfFile.path)..open();
+    }
+    scene.markDirty();
+    notifyListeners();
+  }
+
+  /// A new tab keeps the input mode the user already has: once a stylus was seen, fingers
+  /// navigate in every notebook.
+  void adoptInputMode(EditorController other) {
+    _stylusDetected = other._stylusDetected;
+    _stylusOnly = other._stylusOnly;
   }
 
   /// `true` exactly once after opening: the canvas then fits the page width.
@@ -250,33 +332,41 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> _save(bool thumbnail) async {
-    if (!_opened) return;
+    if (!_bind()) return;
     try {
       final revision = engine.documentRevision();
       if (revision != _savedRevision) {
-        final report = await engine.saveDocument(path: _entry.documentFile.path);
+        final report = await engine.saveDocument(slot: _slot, path: _entry.documentFile.path);
         _savedRevision = report.revision;
-        _entry = await library.writeMeta(
-          _entry,
-          _entry.meta.copyWith(paper: _paperStyle, pageCount: _pages.length, modified: DateTime.now()),
-        );
+        final meta = _entry.meta.copyWith(paper: _paperStyle, pageCount: _pages.length, modified: DateTime.now());
+        await library.writeMeta(_entry, meta);
+        // Keep the current folder: the notebook may have been moved meanwhile ([relocate]).
+        _entry = NotebookEntry(_entry.dir, meta);
         onSaved?.call();
       }
-      if (thumbnail && !_disposed) {
+      // Unchanged since the last preview: skip it (every open tab is saved like this
+      // whenever the library is shown).
+      if (thumbnail && !_disposed && revision != _thumbnailRevision) {
         final png = await renderThumbnail(this);
-        if (png != null) await _entry.thumbnailFile.writeAsBytes(png, flush: true);
+        if (png != null) {
+          await _entry.thumbnailFile.writeAsBytes(png, flush: true);
+          _thumbnailRevision = revision;
+        }
       }
     } catch (e) {
       onMessage?.call('Could not save "${_entry.name}": $e');
     }
   }
 
-  /// Final save (with thumbnail) before leaving the editor. Blank pages that were only
-  /// created by scrolling down (nothing written on them) are dropped first, so browsing
-  /// does not leave a trail of empty pages in the notebook and its PDF export.
+  /// Final save (with thumbnail) before the tab closes. Blank pages that were only created
+  /// by scrolling down (nothing written on them) are dropped first, so browsing does not
+  /// leave a trail of empty pages in the notebook and its PDF export. The document stays
+  /// in the engine until [dispose].
   Future<void> close() {
-    if (_opened) engine.endHistoryGroup();
-    if (_opened && isPaged && engine.trimTrailingBlankPages() > 0) _setPages(engine.documentPages());
+    if (_bind()) {
+      engine.endHistoryGroup();
+      if (isPaged && engine.trimTrailingBlankPages() > 0) _setPages(engine.documentPages());
+    }
     return save(thumbnail: true);
   }
 
@@ -301,10 +391,10 @@ class EditorController extends ChangeNotifier {
 
   /// Reverts the last edit (stroke, erase, selection move / resize / duplicate / cut /
   /// paste / delete, sticky-note change, clear). No-op when there is nothing to undo.
-  void undo() => _applyHistoryStep(_opened ? engine.undo() : null);
+  void undo() => _applyHistoryStep(_bind() ? engine.undo() : null);
 
   /// Re-applies the last undone edit.
-  void redo() => _applyHistoryStep(_opened ? engine.redo() : null);
+  void redo() => _applyHistoryStep(_bind() ? engine.redo() : null);
 
   void _applyHistoryStep(SceneDelta? delta) {
     if (delta == null) return;
@@ -319,11 +409,11 @@ class EditorController extends ChangeNotifier {
   /// Merges the following edits into one undo step until [endHistoryGroup] (gestures
   /// made of many engine calls).
   void beginHistoryGroup() {
-    if (_opened) engine.beginHistoryGroup();
+    if (_bind()) engine.beginHistoryGroup();
   }
 
   void endHistoryGroup() {
-    if (!_opened || _disposed) return;
+    if (!_bind()) return;
     engine.endHistoryGroup();
     _refreshHistory();
   }
@@ -355,7 +445,7 @@ class EditorController extends ChangeNotifier {
   /// within [Viewport.appendMargin] of the bottom of the last page, the engine appends
   /// page N + 1 directly beneath page N.
   void _appendPageNear(double y) {
-    if (!isPaged) return;
+    if (!isPaged || !_bind()) return;
     final page = engine.appendPageIfNearEnd(y: y, margin: Viewport.appendMargin);
     if (page == null) {
       if (!_pageLimitShown && _pages.length >= engine.maxPageCount()) {
@@ -404,7 +494,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void setPaperStyle(PaperStyle s) {
-    if (s == _paperStyle) return;
+    if (s == _paperStyle || !_bind()) return;
     _applyInfo(engine.setPaperStyle(style: s));
     _edited();
     notifyListeners();
@@ -432,7 +522,12 @@ class EditorController extends ChangeNotifier {
 
   // ------------------------------------------------------------------ scene
 
+  /// Reloads the whole scene from the engine.
   void loadScene() {
+    if (_bind()) _loadScene();
+  }
+
+  void _loadScene() {
     final snapshot = engine.getScene();
     scene.load(snapshot);
     _applySelection(snapshot.selection);
@@ -440,11 +535,12 @@ class EditorController extends ChangeNotifier {
 
   /// Removes all strokes and notes (pages, paper and imported PDF stay).
   void clearPage() {
+    if (!_bind()) return;
     engine.resetDocument();
     selectionPreview.value = null;
     notePreview.value = null;
     live.clear();
-    loadScene();
+    _loadScene();
     _edited();
     notifyListeners();
   }
@@ -452,12 +548,14 @@ class EditorController extends ChangeNotifier {
   // ------------------------------------------------------------------ drawing
 
   void beginStroke(EditorTool tool, Offset world, double pressure) {
+    if (!_bind()) return;
     final t = tool.engineTool ?? ToolType.pen;
     engine.beginStroke(tool: t, brush: brushFor(tool).toEngine());
     addPoint(world, pressure);
   }
 
   void addPoint(Offset world, double pressure) {
+    if (!_bind()) return;
     engine.addPoint(
       point: StrokePoint(x: world.dx, y: world.dy, pressure: pressure),
     );
@@ -467,9 +565,10 @@ class EditorController extends ChangeNotifier {
     if (isPaged && end != null && world.dy >= end - Viewport.appendMargin) _appendPageNear(world.dy);
   }
 
-  /// Commits the stroke; rectangle auto-correction happens inside this call, so the
-  /// snapped shape is what the next frame shows.
+  /// Commits the stroke. With [autoCorrect] on, shape snapping happens inside this call,
+  /// so the snapped shape is what the next frame shows.
   void finishStroke(EditorTool tool) {
+    if (!_bind()) return;
     final t = tool.engineTool ?? ToolType.pen;
     final render = engine.finishStroke(tool: t, autoCorrect: _autoCorrect);
     live.setPreview(null);
@@ -480,7 +579,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void cancelStroke() {
-    engine.cancelStroke();
+    if (_bind()) engine.cancelStroke();
     live.setPreview(null);
   }
 
@@ -488,6 +587,7 @@ class EditorController extends ChangeNotifier {
 
   /// Erases along the eraser's movement from [from] to [to] with the current mode.
   void eraseAlong(Offset from, Offset to) {
+    if (!_bind()) return;
     final delta = engine.eraseAlong(
       x0: from.dx,
       y0: from.dy,
@@ -522,6 +622,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void selectLasso(List<Offset> polygon) {
+    if (!_bind()) return;
     final flat = <double>[
       for (final p in polygon) ...[p.dx, p.dy],
     ];
@@ -530,6 +631,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void selectBox(Rect r) {
+    if (!_bind()) return;
     engine.selectInRegion(
       rect: ViewportRect(left: r.left, top: r.top, right: r.right, bottom: r.bottom),
     );
@@ -537,51 +639,55 @@ class EditorController extends ChangeNotifier {
   }
 
   void selectAt(Offset world, double tolerance) {
+    if (!_bind()) return;
     engine.selectAt(x: world.dx, y: world.dy, tolerance: tolerance);
     _applySelection(engine.getSelection());
   }
 
   void clearSelection({bool notify = true}) {
-    engine.clearSelection();
+    if (_bind()) engine.clearSelection();
     _applySelection(const SelectionInfo(ids: []), notify: notify);
   }
 
   void commitTransform(SelectionPreview p) {
     selectionPreview.value = null;
-    if (p.from == p.to) return;
+    if (p.from == p.to || !_bind()) return;
     _applyDelta(engine.transformSelection(scaleX: p.scaleX, scaleY: p.scaleY, dx: p.dx, dy: p.dy));
   }
 
   void duplicateSelection() {
-    if (hasSelection) _applyDelta(engine.duplicateSelection());
+    if (hasSelection && _bind()) _applyDelta(engine.duplicateSelection());
   }
 
   void copySelection() {
+    if (!_bind()) return;
     _hasClipboard = engine.copySelection() > 0;
     notifyListeners();
   }
 
   void cutSelection() {
-    if (!hasSelection) return;
+    if (!hasSelection || !_bind()) return;
     _applyDelta(engine.cutSelection());
     _hasClipboard = engine.hasClipboard();
     notifyListeners();
   }
 
   void deleteSelection() {
-    if (hasSelection) _applyDelta(engine.deleteSelection());
+    if (hasSelection && _bind()) _applyDelta(engine.deleteSelection());
   }
 
   void pasteAt(Offset worldCenter) {
-    if (!_hasClipboard) return;
+    if (!_hasClipboard || !_bind()) return;
     _applyDelta(engine.pasteClipboard(centerX: worldCenter.dx, centerY: worldCenter.dy));
   }
 
   // ------------------------------------------------------------------ sticky notes
 
-  StickyNote? noteAt(Offset world) => engine.stickyNoteAt(x: world.dx, y: world.dy);
+  StickyNote? noteAt(Offset world) => _bind() ? engine.stickyNoteAt(x: world.dx, y: world.dy) : null;
 
+  /// Only called while the notebook is open (the canvas exists only then).
   StickyNote createNote(Offset world) {
+    _bind();
     final note = engine.createStickyNote(
       x: world.dx,
       y: world.dy,
@@ -597,6 +703,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void updateNote(StickyNote note) {
+    if (!_bind()) return;
     final updated = engine.updateStickyNote(note: note);
     if (updated == null) return;
     scene.upsertNote(updated);
@@ -605,16 +712,21 @@ class EditorController extends ChangeNotifier {
     _edited();
   }
 
-  void deleteNote(String id) => _applyDelta(engine.deleteItems(ids: [id]));
+  void deleteNote(String id) {
+    if (_bind()) _applyDelta(engine.deleteItems(ids: [id]));
+  }
 
   // ------------------------------------------------------------------ export
 
-  Future<PdfExportReport> exportPdf(String path) => engine.exportToPdf(path: path);
+  Future<PdfExportReport> exportPdf(String path) => engine.exportToPdf(slot: _slot, path: path);
 
   @override
   void dispose() {
     _disposed = true;
     _autosave?.cancel();
+    // Frees the engine document (with its undo history). Unsaved edits are gone: call
+    // [close] first to keep them.
+    if (_started) engine.closeDocument(slot: _slot);
     viewport.onReachEnd = null;
     _pdf?.dispose();
     scene.dispose();

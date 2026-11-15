@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../rust/document/eraser.dart';
+import '../rust/document/page.dart';
 import '../rust/document/paper.dart';
 import '../rust/geometry/stroke.dart';
 
@@ -108,6 +109,15 @@ extension PaperStyleLabel on PaperStyle {
   };
 }
 
+/// Icon of a notebook kind (tabs, quick-open menu).
+extension DocumentKindIcon on DocumentKind {
+  IconData get icon => switch (this) {
+    DocumentKind.notebook => Icons.menu_book_outlined,
+    DocumentKind.whiteboard => Icons.dashboard_outlined,
+    DocumentKind.pdfAnnotation => Icons.picture_as_pdf_outlined,
+  };
+}
+
 extension EraserModeLabel on EraserMode {
   String get label => switch (this) {
     EraserMode.stroke => 'Stroke eraser',
@@ -124,11 +134,3 @@ extension EraserModeLabel on EraserMode {
     EraserMode.partial => Icons.content_cut,
   };
 }
-
-/// One-line usage hint for the status bar.
-String toolHint(EditorTool tool, EraserMode eraser) => switch (tool) {
-  EditorTool.pen || EditorTool.pencil || EditorTool.highlighter => 'Draw a closed box to snap it into a rectangle',
-  EditorTool.eraser => eraser.hint,
-  EditorTool.lasso || EditorTool.boxSelect => 'Drag to select · drag the box to move · corners resize (Shift keeps ratio)',
-  EditorTool.stickyNote => 'Tap to add · drag to move · drag the corner to resize · tap to edit',
-};
