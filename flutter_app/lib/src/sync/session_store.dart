@@ -24,9 +24,31 @@ class FileSessionStore implements SessionStore {
 
   final File file;
 
+  static const _fileName = 'google_session.bin';
+
   static Future<FileSessionStore> standard() async {
     final dir = await getApplicationSupportDirectory();
-    return FileSessionStore(File('${dir.path}${Platform.pathSeparator}google_session.bin'));
+    final file = File('${dir.path}${Platform.pathSeparator}$_fileName');
+    if (Platform.isWindows) await adoptLegacySession(file);
+    return FileSessionStore(file);
+  }
+
+  /// On Windows the support directory is `%APPDATA%\<CompanyName>\<ProductName>`, read from
+  /// the exe's version resource, and the product was called `flutter_app` before it became
+  /// EasyNotes. Moves a session saved under the old name next to [file] (once, and never over
+  /// a newer one), so updating the app doesn't sign the user out. DPAPI doesn't bind the data
+  /// to its path, so the moved file still decrypts.
+  static Future<void> adoptLegacySession(File file, {String legacyProduct = 'flutter_app'}) async {
+    final sep = Platform.pathSeparator;
+    final legacy = File('${file.parent.parent.path}$sep$legacyProduct$sep$_fileName');
+    if (legacy.absolute.path == file.absolute.path || await file.exists() || !await legacy.exists()) return;
+    try {
+      await file.parent.create(recursive: true);
+      await legacy.rename(file.path);
+      await legacy.parent.delete(); // only succeeds when nothing else is left in it
+    } on FileSystemException {
+      // A session that can't be moved only means signing in once more.
+    }
   }
 
   @override

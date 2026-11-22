@@ -90,12 +90,14 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.easynotes" "\0"
-            VALUE "FileDescription", "flutter_app" "\0"
+            VALUE "FileDescription", "EasyNotes" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "flutter_app" "\0"
+            VALUE "InternalName", "EasyNotes" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.easynotes. All rights reserved." "\0"
-            VALUE "OriginalFilename", "flutter_app.exe" "\0"
-            VALUE "ProductName", "flutter_app" "\0"
+            VALUE "OriginalFilename", "EasyNotes.exe" "\0"
+            // ProductName also names the app's %APPDATA%\com.easynotes\<ProductName> folder
+            // (path_provider); session_store.dart moves a session saved under "flutter_app".
+            VALUE "ProductName", "EasyNotes" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

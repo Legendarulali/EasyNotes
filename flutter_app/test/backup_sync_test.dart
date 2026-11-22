@@ -388,6 +388,26 @@ void main() {
       expect(await store.read(), isNull);
     });
 
+    test('a session saved under the old product name (flutter_app) moves to the EasyNotes folder', () async {
+      final sep = Platform.pathSeparator;
+      final legacy = File('${tmp.path}${sep}com.easynotes${sep}flutter_app${sep}google_session.bin');
+      await legacy.parent.create(recursive: true);
+      await legacy.writeAsBytes([1, 2, 3]);
+      final current = File('${tmp.path}${sep}com.easynotes${sep}EasyNotes${sep}google_session.bin');
+
+      await FileSessionStore.adoptLegacySession(current);
+      expect(await current.readAsBytes(), [1, 2, 3]);
+      expect(legacy.existsSync(), isFalse);
+      expect(legacy.parent.existsSync(), isFalse, reason: 'the emptied old folder is removed');
+
+      // A session saved since then is never replaced by an old one.
+      await legacy.parent.create();
+      await legacy.writeAsBytes([9]);
+      await FileSessionStore.adoptLegacySession(current);
+      expect(await current.readAsBytes(), [1, 2, 3]);
+      expect(legacy.existsSync(), isTrue);
+    });
+
     test('a stored session is restored without signing in again', () async {
       final store = _MemoryStore();
       final auth = DesktopGoogleAuth(clientId: 'id.apps.googleusercontent.com', clientSecret: 's', store: () async => store);
