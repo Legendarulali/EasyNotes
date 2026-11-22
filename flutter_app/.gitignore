@@ -49,3 +49,5 @@ app.*.map.json
 
 # Google OAuth client ids (see google_oauth.example.json / README)
 google_oauth.json
+
+android/build/
