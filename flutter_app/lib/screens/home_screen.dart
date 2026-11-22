@@ -249,29 +249,11 @@ class _HomeScreenState extends State<HomeScreen> {
     await _refresh();
   }
 
-  Future<String?> _askName({required String title, required String initial, String action = 'Create'}) {
-    final ctrl = TextEditingController(text: initial)
-      ..selection = TextSelection(baseOffset: 0, extentOffset: initial.length);
-    return showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Name'),
-          onSubmitted: (v) => Navigator.pop(context, v.trim().isEmpty ? null : v.trim()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, ctrl.text.trim().isEmpty ? null : ctrl.text.trim()),
-            child: Text(action),
-          ),
-        ],
-      ),
-    ).whenComplete(ctrl.dispose);
-  }
+  Future<String?> _askName({required String title, required String initial, String action = 'Create'}) =>
+      showDialog<String>(
+        context: context,
+        builder: (_) => _NameDialog(title: title, initial: initial, action: action),
+      );
 
   Future<Directory?> _pickFolder(LibraryEntry moving) async {
     final folders = await lib.allFolders();
@@ -521,6 +503,56 @@ class _NewMenuButton extends StatelessWidget {
         icon: const Icon(Icons.add),
         label: const Text('New'),
       ),
+    );
+  }
+}
+
+/// Asks for a notebook or folder name and pops with it (trimmed), or `null`.
+///
+/// The dialog owns its controller so it is disposed together with the route, after the
+/// closing animation. `showDialog` completes as soon as the route is popped, and the
+/// fading dialog keeps rebuilding while the soft keyboard goes away, so disposing the
+/// controller when that future completes broke the closing frames on Android.
+class _NameDialog extends StatefulWidget {
+  const _NameDialog({required this.title, required this.initial, required this.action});
+
+  final String title;
+  final String initial;
+  final String action;
+
+  @override
+  State<_NameDialog> createState() => _NameDialogState();
+}
+
+class _NameDialogState extends State<_NameDialog> {
+  late final TextEditingController _name = TextEditingController(text: widget.initial)
+    ..selection = TextSelection(baseOffset: 0, extentOffset: widget.initial.length);
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _name.text.trim();
+    Navigator.pop(context, name.isEmpty ? null : name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _name,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Name'),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: _submit, child: Text(widget.action)),
+      ],
     );
   }
 }
