@@ -40,7 +40,11 @@ class EditorAppBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 640;
+    final width = MediaQuery.sizeOf(context).width;
+    final compact = width < 640;
+    // Phones in portrait: with Android's 48 dp buttons every action would leave the
+    // tabs no room at all, so paper, paste and export move into "More".
+    final narrow = width < 600;
     final controller = tabs.focused;
     return Material(
       color: _chrome,
@@ -58,7 +62,7 @@ class EditorAppBar extends StatelessWidget {
               if (controller != null)
                 ListenableBuilder(
                   listenable: controller,
-                  builder: (context, _) => _actions(context, controller, compact),
+                  builder: (context, _) => _actions(context, controller, compact: compact, narrow: narrow),
                 ),
             ],
           ),
@@ -74,7 +78,7 @@ class EditorAppBar extends StatelessWidget {
 
   void _toggleSplit() => tabs.isSplit ? tabs.closeSplit() : tabs.splitRight();
 
-  Widget _actions(BuildContext context, EditorController controller, bool compact) => Row(
+  Widget _actions(BuildContext context, EditorController controller, {required bool compact, required bool narrow}) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
       if (!compact)
@@ -85,7 +89,7 @@ class EditorAppBar extends StatelessWidget {
           selectedIcon: const Icon(Icons.vertical_split),
           onPressed: _toggleSplit,
         ),
-      if (controller.isOpen && controller.isPaged)
+      if (!narrow && controller.isOpen && controller.isPaged)
         PopupMenuButton<PaperStyle>(
           tooltip: 'Paper',
           initialValue: controller.paperStyle,
@@ -124,13 +128,26 @@ class EditorAppBar extends StatelessWidget {
         selectedIcon: const Icon(Icons.do_not_touch_outlined),
         onPressed: () => controller.setStylusOnly(!controller.stylusOnly),
       ),
-      IconButton(
-        tooltip: 'Paste (Ctrl+V)',
-        icon: const Icon(Icons.content_paste),
-        onPressed: controller.hasClipboard ? onPaste : null,
-      ),
+      if (!narrow)
+        IconButton(
+          tooltip: 'Paste (Ctrl+V)',
+          icon: const Icon(Icons.content_paste),
+          onPressed: controller.hasClipboard ? onPaste : null,
+        ),
       const SizedBox(width: 4),
-      if (compact)
+      if (narrow)
+        // Export is in "More" here; still show that one is running.
+        ...[
+          if (exporting)
+            const Tooltip(
+              message: 'Exporting PDF…',
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+              ),
+            ),
+        ]
+      else if (compact)
         IconButton(
           tooltip: 'Export PDF',
           onPressed: exporting || !controller.isOpen ? null : onExport,
@@ -146,25 +163,65 @@ class EditorAppBar extends StatelessWidget {
               : const Icon(Icons.picture_as_pdf_outlined),
           label: const Text('Export PDF'),
         ),
-      PopupMenuButton<String>(
+      PopupMenuButton<Object>(
         tooltip: 'More',
         icon: const Icon(Icons.more_vert),
         onSelected: (v) {
-          if (v == 'clear') onClear();
-          if (v == 'split') _toggleSplit();
+          switch (v) {
+            case final PaperStyle style:
+              controller.setPaperStyle(style);
+            case _MoreAction.paste:
+              onPaste();
+            case _MoreAction.export:
+              onExport();
+            case _MoreAction.split:
+              _toggleSplit();
+            case _MoreAction.clear:
+              onClear();
+          }
         },
-        itemBuilder: (_) => [
+        itemBuilder: (context) => [
+          if (narrow && controller.isOpen && controller.isPaged) ...[
+            PopupMenuItem<Object>(
+              enabled: false,
+              height: 32,
+              child: Text('Paper', style: Theme.of(context).textTheme.labelMedium?.copyWith(color: Colors.white54)),
+            ),
+            for (final s in const [PaperStyle.dictando, PaperStyle.matematica, PaperStyle.whiteboard])
+              CheckedPopupMenuItem<Object>(value: s, checked: s == controller.paperStyle, child: Text(s.label)),
+            const PopupMenuDivider(),
+          ],
+          if (narrow) ...[
+            PopupMenuItem<Object>(
+              value: _MoreAction.paste,
+              enabled: controller.hasClipboard,
+              child: const ListTile(
+                leading: Icon(Icons.content_paste),
+                title: Text('Paste'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            PopupMenuItem<Object>(
+              value: _MoreAction.export,
+              enabled: !exporting && controller.isOpen,
+              child: const ListTile(
+                leading: Icon(Icons.picture_as_pdf_outlined),
+                title: Text('Export PDF'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ],
           if (compact)
-            PopupMenuItem(
-              value: 'split',
+            PopupMenuItem<Object>(
+              value: _MoreAction.split,
               child: ListTile(
                 leading: const Icon(Icons.vertical_split_outlined),
                 title: Text(tabs.isSplit ? 'Close split view' : 'Split view'),
                 contentPadding: EdgeInsets.zero,
               ),
             ),
-          const PopupMenuItem(
-            value: 'clear',
+          const PopupMenuItem<Object>(
+            value: _MoreAction.clear,
             child: ListTile(
               leading: Icon(Icons.delete_sweep_outlined),
               title: Text('Clear all ink & notes'),
@@ -177,6 +234,9 @@ class EditorAppBar extends StatelessWidget {
     ],
   );
 }
+
+/// Entries of the editor's "More" menu (besides the paper styles on phones).
+enum _MoreAction { paste, export, split, clear }
 
 /// The open notebooks as a horizontal strip of tabs: tap one to show it (in the focused
 /// pane of a split screen), × (or a middle click) to close it, `+` to open another

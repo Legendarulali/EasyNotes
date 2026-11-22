@@ -3,6 +3,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -876,6 +877,52 @@ void main() {
       await tester.pumpAndSettle();
     }
     expect(checked, isTrue, reason: 'the notebook always loaded before the editor rebuilt');
+
+    await tester.pumpWidget(const SizedBox());
+    tabs.dispose();
+    sync.dispose();
+    await dir.delete(recursive: true);
+  });
+
+  testWidgets('phone portrait (384 dp, Android): the editor top bar fits and keeps room for the tabs', (tester) async {
+    // A Galaxy S24 Ultra at its default display zoom; Android's 48 dp touch targets.
+    tester.view
+      ..physicalSize = const Size(1440, 3120)
+      ..devicePixelRatio = 3.75;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.reset();
+    });
+
+    final dir = await Directory.systemTemp.createTemp('easynotes_phone');
+    final lib = LibraryService(dir);
+    final sync = SyncService(library: lib, auth: GoogleAuth.forPlatform());
+    final tabs = OpenNotebooks(library: lib, sync: sync);
+    final ruled = tabs.open(await lib.createNotebook(dir, 'Lecture notes', NotebookTemplate.ruled));
+
+    // Layout errors (a RenderFlex overflow) are collected, then asserted on.
+    final errors = <String>[];
+    final reportError = FlutterError.onError;
+    FlutterError.onError = (details) => errors.add(details.toString());
+    try {
+      await tester.pumpWidget(MaterialApp(theme: buildEasyNotesTheme(), home: EditorScreen(tabs: tabs)));
+      await _until(tester, () => ruled.isOpen);
+      await tester.pumpAndSettle();
+    } finally {
+      FlutterError.onError = reportError;
+    }
+    expect(errors, isEmpty);
+    expect(tester.getSize(find.byType(NotebookTab)).width, greaterThanOrEqualTo(100), reason: 'the tab stays readable');
+
+    // The actions that left the bar are in "More", and they still work.
+    await tester.tap(find.byTooltip('More'));
+    await tester.pumpAndSettle();
+    expect(find.text('Export PDF'), findsOneWidget);
+    expect(find.text('Paste'), findsOneWidget);
+    await tester.tap(find.widgetWithText(CheckedPopupMenuItem<Object>, 'Grid'));
+    await tester.pumpAndSettle();
+    expect(ruled.paperStyle, PaperStyle.matematica);
 
     await tester.pumpWidget(const SizedBox());
     tabs.dispose();

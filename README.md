@@ -52,6 +52,7 @@ easynotes/
   - Closing a tab saves it, drops its blank trailing pages and refreshes its thumbnail. Closing the last one returns to the library.
   - Renaming or moving a notebook (or its folder) in the library moves its open tab along. Deleting it closes the tab.
   - The clipboard is shared, so you can copy in one tab and paste in another.
+  - On phones in portrait (under 600 dp wide), the paper style, *Paste* and *Export PDF* move from the top bar into its ⋮ menu, so the tabs keep their room.
 - **Split screen.** Shows two panes side by side: two notebooks (a textbook PDF next to your notes), or the same notebook twice (page 1 next to page 12).
   - To open it: use the split button in the top bar or Ctrl+\ (Cmd+\ on macOS); right-click or long-press a tab and pick **Split right**; or drag a tab onto the right half of the canvas.
   - Each pane has its own scroll position, zoom and page, and its own status bar. The divider can be dragged (each pane keeps at least 20 % of the width), and a double-click on it restores 50 / 50.
