@@ -1,12 +1,17 @@
-// Writes the Windows app icon, windows/runner/resources/app_icon.ico, from the vector logo in
-// lib/src/ui/app_logo.dart (Runner.rc embeds it as IDI_APP_ICON). Run from flutter_app/:
+// Writes the app icons from the vector logo in lib/src/ui/app_logo.dart. Run from flutter_app/:
 //
 //   flutter test tool/generate_app_icon.dart
 //
 // Every size is drawn from the vector mark, not scaled from one bitmap, so the small ones stay
-// sharp. Besides 16–256 px it holds 20, 24 and 40 px, which Windows picks at 125 % and 150 %
-// display scaling. 256 px is stored as PNG and the rest as 32-bit BMPs with an AND mask, the
-// classic layout every Windows tool reads.
+// sharp.
+//
+// * Windows: windows/runner/resources/app_icon.ico, which Runner.rc embeds as IDI_APP_ICON.
+//   Besides 16–256 px it holds 20, 24 and 40 px, which Windows picks at 125 % and 150 % display
+//   scaling. 256 px is stored as PNG and the rest as 32-bit BMPs with an AND mask, the classic
+//   layout every Windows tool reads.
+// * Android: the adaptive icon's layers, mipmap-*/ic_launcher_{background,foreground}.png
+//   (108 dp; mipmap-anydpi-v26/ic_launcher.xml stacks them, Android 8+), and the plain
+//   mipmap-*/ic_launcher.png (48 dp) for older versions.
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -17,7 +22,21 @@ import 'package:flutter_test/flutter_test.dart';
 const _sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256];
 const _out = 'windows/runner/resources/app_icon.ico';
 
+/// Pixels per dp of each Android density bucket.
+const _densities = {'mdpi': 1.0, 'hdpi': 1.5, 'xhdpi': 2.0, 'xxhdpi': 3.0, 'xxxhdpi': 4.0};
+const _res = 'android/app/src/main/res';
+
 void main() {
+  test('writes the Android launcher icons', () async {
+    for (final MapEntry(key: bucket, value: scale) in _densities.entries) {
+      final dir = '$_res/mipmap-$bucket';
+      await _writePng('$dir/ic_launcher.png', (48 * scale).round(), AppLogoLayer.full);
+      await _writePng('$dir/ic_launcher_background.png', (108 * scale).round(), AppLogoLayer.adaptiveBackground);
+      await _writePng('$dir/ic_launcher_foreground.png', (108 * scale).round(), AppLogoLayer.adaptiveForeground);
+    }
+    expect(File('$_res/mipmap-anydpi-v26/ic_launcher.xml').existsSync(), isTrue, reason: 'stacks the adaptive layers');
+  });
+
   test('writes $_out', () async {
     final images = <(int, Uint8List)>[];
     for (final size in _sizes) {
@@ -34,6 +53,15 @@ void main() {
     // ignore: avoid_print
     print('Wrote $_out: ${_sizes.join(', ')} px, ${ico.length} bytes');
   });
+}
+
+Future<void> _writePng(String path, int size, AppLogoLayer layer) async {
+  final image = await renderAppLogo(size, layer: layer);
+  final png = await image.toByteData(format: ui.ImageByteFormat.png);
+  image.dispose();
+  File(path).writeAsBytesSync(png!.buffer.asUint8List(), flush: true);
+  // ignore: avoid_print
+  print('Wrote $path ($size px)');
 }
 
 /// An ICONDIR header, one 16-byte entry per image, then the images themselves.
