@@ -25,6 +25,7 @@ class PdfBackgrounds extends ChangeNotifier {
   bool _busy = false;
   final Map<int, _PageImage> _cache = {};
   final Map<int, int> _wanted = {};
+  final Map<Object?, Set<int>> _visibleIn = {};
   Set<int> _visible = const {};
 
   bool get isReady => _doc != null;
@@ -61,10 +62,13 @@ class PdfBackgrounds extends ChangeNotifier {
     if (!_busy) scheduleMicrotask(_pump);
   }
 
-  /// Pages currently on screen; used to prioritise rendering and to evict others.
-  void setVisible(Set<int> pages) {
-    if (setEquals(pages, _visible)) return;
-    _visible = pages;
+  /// Pages currently on screen in [view]; used to prioritise rendering and to evict
+  /// others. The split screen can show the PDF twice (e.g. page 1 left, page 4 right):
+  /// what either view shows counts as visible.
+  void setVisible(Set<int> pages, {Object? view}) {
+    if (setEquals(pages, _visibleIn[view])) return;
+    _visibleIn[view] = pages;
+    _visible = {for (final s in _visibleIn.values) ...s};
   }
 
   static int _quantise(double px) {

@@ -8,6 +8,12 @@
 //! Documents are addressed by *slots*: small integers handed out by the caller, one per
 //! open tab. Slot [`Workspace::SCRATCH`] always resolves: it is the document the API works on
 //! before any tab binds its own, and the one that takes over when the active tab closes.
+//!
+//! The split screen relies on the same binding. Two notebooks side by side are two slots:
+//! each pane binds its slot before every call, so the panes' calls can interleave freely,
+//! down to two strokes in progress at once, without one document seeing the other's edits.
+//! The same notebook in both panes is *one* slot (one document, one undo history and one
+//! selection); the panes only differ in their viewports, which live in the UI.
 
 use super::{ClipItem, Engine};
 use std::collections::HashMap;
@@ -224,6 +230,68 @@ mod tests {
             1,
             "pasting elsewhere left the source alone"
         );
+    }
+
+    #[test]
+    fn split_panes_interleave_edits_without_crosstalk() {
+        // Two notebooks side by side: every call is preceded by binding its pane's slot,
+        // so the two panes' calls alternate at will.
+        let mut ws = Workspace::new();
+        ws.install(1, notebook());
+        ws.install(2, notebook());
+        ws.activate(1);
+        ws.active_mut()
+            .begin_stroke(ToolType::Pen, Brush::default());
+        ws.activate(2);
+        ws.active_mut()
+            .begin_stroke(ToolType::Highlighter, Brush::default());
+        for i in 0..10 {
+            let step = i as f32 * 20.0;
+            ws.activate(1);
+            ws.active_mut()
+                .add_point(StrokePoint::new(100.0 + step, 100.0, 0.5));
+            ws.activate(2);
+            ws.active_mut()
+                .add_point(StrokePoint::new(100.0, 300.0 + step, 0.5));
+        }
+        ws.activate(1);
+        let left = ws
+            .active_mut()
+            .finish_stroke(ToolType::Pen, false)
+            .expect("left pane's stroke");
+        ws.activate(2);
+        let right = ws
+            .active_mut()
+            .finish_stroke(ToolType::Highlighter, false)
+            .expect("right pane's stroke");
+        assert_eq!(left.tool, ToolType::Pen);
+        assert!(
+            left.bounds.bottom < 150.0 && left.bounds.right > 250.0,
+            "only the left pane's samples (a horizontal line)"
+        );
+        assert_eq!(right.tool, ToolType::Highlighter);
+        assert!(
+            right.bounds.top > 250.0 && right.bounds.right < 150.0,
+            "only the right pane's samples (a vertical line)"
+        );
+
+        // Undo in one pane leaves the other document and its history alone.
+        ws.activate(1);
+        assert!(ws.active_mut().undo().is_some());
+        assert_eq!(ws.active().item_count(), 0);
+        ws.activate(2);
+        assert_eq!(ws.active().item_count(), 1);
+        assert!(ws.active().can_undo() && !ws.active().can_redo());
+
+        // The clipboard is shared: copy on the right, paste on the left.
+        let all = crate::geometry::ViewportRect::new(0.0, 0.0, 1000.0, 1000.0);
+        ws.active_mut().select_in_rect(all);
+        assert_eq!(ws.active_mut().copy_selection(), 1);
+        ws.activate(1);
+        let pasted = ws.active_mut().paste_clipboard(500.0, 500.0);
+        assert_eq!(pasted.upserted_strokes.len(), 1);
+        assert_eq!(ws.get(1).map(Engine::item_count), Some(1));
+        assert_eq!(ws.get(2).map(Engine::item_count), Some(1));
     }
 
     #[test]

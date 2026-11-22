@@ -13,12 +13,19 @@ import 'sync_widgets.dart';
 ///
 /// Tapping it **only** resets the zoom to 100 %: the pan offsets are kept as they are
 /// ([Viewport.resetZoom]), so the view never jumps back to (0, 0).
+///
+/// In the split screen each pane has its own bar for its own view ([pane]); only one of
+/// them shows the backup status. A narrow pane drops the coordinates.
 class CanvasStatusBar extends StatelessWidget {
-  const CanvasStatusBar({super.key, required this.controller, this.sync});
+  const CanvasStatusBar({super.key, required this.controller, this.pane = EditorPane.primary, this.sync});
 
   static const double height = 30;
 
+  /// Below this width the X / Y coordinates are left out.
+  static const double compactWidth = 440;
+
   final EditorController controller;
+  final EditorPane pane;
   final SyncService? sync;
 
   @override
@@ -28,10 +35,12 @@ class CanvasStatusBar extends StatelessWidget {
       fontFeatures: const [FontFeature.tabularFigures()],
     );
     final sync = this.sync;
-    return ListenableBuilder(
-      listenable: Listenable.merge([controller, controller.viewport]),
+    final vp = controller.viewOf(pane);
+    return LayoutBuilder(
+      builder: (context, constraints) => ListenableBuilder(
+      listenable: Listenable.merge([controller, vp]),
       builder: (context, _) {
-        final vp = controller.viewport;
+        final compact = constraints.maxWidth < compactWidth;
         final zoom = (vp.scale * 100).round();
         final offset = vp.offset;
         final x = math.max(0, offset.dx.round());
@@ -55,11 +64,21 @@ class CanvasStatusBar extends StatelessWidget {
                       Icon(zoom == 100 ? Icons.zoom_in : Icons.youtube_searched_for, size: 15, color: Colors.white54),
                       const SizedBox(width: 6),
                       Text('$zoom%', style: text),
-                      const _Dot(),
-                      Text('X $x  Y $y', style: text),
+                      if (!compact) ...[
+                        const _Dot(),
+                        Text('X $x  Y $y', style: text),
+                      ],
                       if (page != null) ...[
                         const _Dot(),
-                        Text('Page ${page + 1} / ${controller.pages.length}', style: text),
+                        Flexible(
+                          child: Text(
+                            'Page ${page + 1} / ${controller.pages.length}',
+                            style: text,
+                            maxLines: 1,
+                            overflow: TextOverflow.fade,
+                            softWrap: false,
+                          ),
+                        ),
                       ],
                       const Spacer(),
                       if (sync != null) SyncStatusChip(sync: sync),
@@ -71,6 +90,7 @@ class CanvasStatusBar extends StatelessWidget {
           ),
         );
       },
+      ),
     );
   }
 }

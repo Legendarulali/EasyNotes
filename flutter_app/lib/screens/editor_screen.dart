@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,7 @@ import '../src/canvas/scene_cache.dart';
 import '../src/canvas/viewport.dart' as canvas;
 import '../src/editor/editor_controller.dart';
 import '../src/editor/open_notebooks.dart';
+import '../src/editor/pin_board.dart';
 import '../src/rust/geometry/sticky_note.dart';
 import '../src/services/library_service.dart';
 import '../src/services/pdf_export_service.dart';
@@ -17,11 +19,19 @@ import '../src/ui/sticky_note_dialog.dart';
 import '../widgets/canvas_status_bar.dart';
 import '../widgets/draggable_toolbar.dart';
 import '../widgets/editor_app_bar.dart';
+import '../widgets/pinned_overlay.dart';
+import '../widgets/split_view.dart';
 
-/// The editor: dark chrome with the tabs of the open notebooks, then the active
-/// notebook's page canvas, floating toolbar and status bar. Edits autosave. Home (or the
-/// back button / gesture) saves every tab and returns to the library, where the tabs stay
-/// open; closing the last tab returns there too.
+/// The editor: dark chrome with the tabs of the open notebooks, then the canvas with the
+/// floating toolbar and the status bar. Edits autosave. Home (or the back button /
+/// gesture) saves every tab and returns to the library, where the tabs stay open; closing
+/// the last tab returns there too.
+///
+/// The canvas can be split into two panes (the toolbar's split button, Ctrl+\, a tab's
+/// "Split right", or dragging a tab onto the right half): two notebooks side by side, or
+/// the same notebook twice, each pane with its own scroll position, zoom and page. The
+/// toolbar is shared and works on the focused pane, the one last touched. Snapshots pinned
+/// from a selection float above both panes.
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.tabs});
 
@@ -38,14 +48,23 @@ class _EditorScreenState extends State<EditorScreen> {
   /// Cloud backup: notebooks are uploaded when a tab closes and when the library is shown.
   SyncService get sync => tabs.sync;
 
+  /// Narrowest a split pane gets, however the divider is dragged.
+  static const double _minPaneWidth = 240;
+
   late final AppLifecycleListener _lifecycle;
   ToolbarPlacement _placement = ToolbarPlacement.initial;
 
-  /// Canvas band behind the docked toolbar; every tab's viewport keeps clear of it.
+  /// Canvas band behind the docked toolbar; the panes' views keep clear of it.
   EdgeInsets? _toolbarBand;
-  EditorController? _shown;
+
+  /// One edit gesture at a time across the panes (palm rejection between them).
+  final CanvasInputGate _gate = CanvasInputGate();
+
+  /// Size of the canvas area (both panes), from the last layout.
+  Size _canvasArea = Size.zero;
   bool _exporting = false;
   bool _leaving = false;
+  bool _pinning = false;
 
   @override
   void initState() {
@@ -55,7 +74,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _lifecycle = AppLifecycleListener(onPause: _saveQuietly, onDetach: _saveQuietly);
     tabs.onMessage = _toast;
     tabs.addListener(_onTabsChanged);
-    _shown = tabs.active?..resume();
+    tabs.focused?.resume();
     library.readSettings().then((s) {
       if (mounted) setState(() => _placement = ToolbarPlacement.fromJson(s));
     });
@@ -85,21 +104,22 @@ class _EditorScreenState extends State<EditorScreen> {
 
   void _onTabsChanged() {
     if (!mounted) return;
-    final c = tabs.active;
-    if (c != null && !identical(c, _shown)) {
-      _shown = c;
-      final band = _toolbarBand;
-      if (band != null) c.viewport.setInsets(canvas.Viewport.insetsFor(band));
-    }
+    _applyInsets();
     setState(() {});
   }
+
+  /// The notebooks on screen (one, or two in the split screen; once if both panes show
+  /// the same one).
+  Set<EditorController> get _shown => {?tabs.active, ?tabs.split};
 
   /// Back to the library, keeping every tab open (their edits are written first).
   Future<void> _goHome() async {
     if (_leaving) return;
     _leaving = true;
     try {
-      await tabs.active?.suspend(thumbnail: true);
+      for (final c in _shown) {
+        await c.suspend(thumbnail: true);
+      }
       await tabs.saveAll();
       unawaited(sync.syncNow());
       if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop(true);
@@ -127,8 +147,29 @@ class _EditorScreenState extends State<EditorScreen> {
   /// from under it.
   void _onToolbarObstruction(EdgeInsets band) {
     _toolbarBand = band;
-    tabs.active?.viewport.setInsets(canvas.Viewport.insetsFor(band));
+    _applyInsets();
   }
+
+  /// Gives each pane's view the part of the toolbar band that covers it: a toolbar docked
+  /// on the left edge only covers the left pane, one on the right edge the right pane, and
+  /// one at the top or bottom both.
+  void _applyInsets() {
+    final band = _toolbarBand;
+    if (band == null) return;
+    final split = tabs.isSplit;
+    for (final pane in EditorPane.values) {
+      final c = tabs.notebookIn(pane);
+      if (c == null) continue;
+      final own = !split
+          ? band
+          : pane == EditorPane.primary
+          ? band.copyWith(right: 0)
+          : band.copyWith(left: 0);
+      c.viewOf(pane).setInsets(canvas.Viewport.insetsFor(own));
+    }
+  }
+
+  void _toggleSplit() => tabs.isSplit ? tabs.closeSplit() : tabs.splitRight();
 
   void _toast(String message, {SnackBarAction? action}) {
     if (!mounted) return;
@@ -137,13 +178,13 @@ class _EditorScreenState extends State<EditorScreen> {
       ..showSnackBar(SnackBar(content: Text(message), action: action, behavior: SnackBarBehavior.floating));
   }
 
-  /// World coordinate at the centre of the visible canvas (paste target).
-  Offset _viewportCenterWorld(EditorController c) {
-    final size = c.viewport.size;
-    return c.viewport.screenToWorld(size.center(Offset.zero));
+  /// World coordinate at the centre of [pane]'s canvas (paste target).
+  Offset _viewportCenterWorld(EditorController c, EditorPane pane) {
+    final view = c.viewOf(pane);
+    return view.screenToWorld(view.size.center(Offset.zero));
   }
 
-  void _paste(EditorController c) => c.pasteAt(_viewportCenterWorld(c));
+  void _paste(EditorController c, EditorPane pane) => c.pasteAt(_viewportCenterWorld(c, pane));
 
   Future<void> _editNote(EditorController c, StickyNote note, {bool isNew = false}) async {
     final result = await showStickyNoteEditor(context, note);
@@ -157,6 +198,41 @@ class _EditorScreenState extends State<EditorScreen> {
       case null:
         // Tapping by accident creates an empty note – drop it if the editor is dismissed.
         if (isNew && current.text.isEmpty) c.deleteNote(note.id);
+    }
+  }
+
+  /// "Pin" on the selection in [pane]: a sharp picture of it (on its page background)
+  /// floats over the canvas, top right, at about the size it has on screen. The document
+  /// itself does not change.
+  Future<void> _pin(EditorController c, EditorPane pane) async {
+    final bounds = c.selectionBounds;
+    if (bounds == null || _pinning) return;
+    _pinning = true;
+    try {
+      final area = pinAreaFor(c, bounds);
+      final scale = pinRenderScale(area, MediaQuery.devicePixelRatioOf(context));
+      final image = await renderArea(c, area, scale: scale, only: c.selectedIds.toSet());
+      if (!mounted) {
+        image.dispose();
+        return;
+      }
+      final room = _canvasArea;
+      final maxWidth = math.max(PinnedBox.minWidth, math.min(480.0, room.width * 0.45));
+      final width = (area.width * c.viewOf(pane).scale).clamp(PinnedBox.minWidth, maxWidth);
+      final size = Size(width, PinnedBox.headerHeight + width * area.height / area.width);
+      final page = c.pageIndexAt(area.center.dy);
+      tabs.pins.pin(
+        image,
+        label: page == null ? c.title : '${c.title} · page ${page + 1}',
+        position: tabs.pins.placeNew(size, room, top: _toolbarBand?.top ?? 0),
+        width: width,
+      );
+      // The pin is the reference now; the dashed box would only sit over the page.
+      c.clearSelection();
+    } catch (e) {
+      _toast('Could not pin the selection: $e');
+    } finally {
+      _pinning = false;
     }
   }
 
@@ -206,10 +282,14 @@ class _EditorScreenState extends State<EditorScreen> {
     library.updateSettings(p.toJson());
   }
 
-  Map<ShortcutActivator, VoidCallback> _shortcuts(EditorController c) => {
-    // Tabs: Ctrl+Tab / Ctrl+Shift+Tab cycle through the open notebooks.
+  /// Shortcuts of the focused pane's notebook [c].
+  Map<ShortcutActivator, VoidCallback> _shortcuts(EditorController c, EditorPane pane) => {
+    // Tabs: Ctrl+Tab / Ctrl+Shift+Tab cycle through the open notebooks (focused pane).
     const SingleActivator(LogicalKeyboardKey.tab, control: true): () => tabs.cycle(1),
     const SingleActivator(LogicalKeyboardKey.tab, control: true, shift: true): () => tabs.cycle(-1),
+    // Split screen on / off.
+    const SingleActivator(LogicalKeyboardKey.backslash, control: true): _toggleSplit,
+    const SingleActivator(LogicalKeyboardKey.backslash, meta: true): _toggleSplit,
     // Undo / redo (holding the keys repeats them).
     const SingleActivator(LogicalKeyboardKey.keyZ, control: true): c.undo,
     const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): c.undo,
@@ -220,13 +300,13 @@ class _EditorScreenState extends State<EditorScreen> {
     const SingleActivator(LogicalKeyboardKey.keyC, meta: true): c.copySelection,
     const SingleActivator(LogicalKeyboardKey.keyX, control: true): c.cutSelection,
     const SingleActivator(LogicalKeyboardKey.keyX, meta: true): c.cutSelection,
-    const SingleActivator(LogicalKeyboardKey.keyV, control: true): () => _paste(c),
-    const SingleActivator(LogicalKeyboardKey.keyV, meta: true): () => _paste(c),
+    const SingleActivator(LogicalKeyboardKey.keyV, control: true): () => _paste(c, pane),
+    const SingleActivator(LogicalKeyboardKey.keyV, meta: true): () => _paste(c, pane),
     const SingleActivator(LogicalKeyboardKey.keyD, control: true): c.duplicateSelection,
     const SingleActivator(LogicalKeyboardKey.keyD, meta: true): c.duplicateSelection,
     const SingleActivator(LogicalKeyboardKey.keyS, control: true): () => c.save(),
     const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () => c.save(),
-    const SingleActivator(LogicalKeyboardKey.digit0, control: true): c.viewport.resetZoom,
+    const SingleActivator(LogicalKeyboardKey.digit0, control: true): c.viewOf(pane).resetZoom,
     const SingleActivator(LogicalKeyboardKey.delete): c.deleteSelection,
     const SingleActivator(LogicalKeyboardKey.backspace): c.deleteSelection,
     const SingleActivator(LogicalKeyboardKey.escape): () => c.clearSelection(),
@@ -234,14 +314,15 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final c = tabs.active;
+    final c = tabs.focused;
+    final pane = tabs.focusedPane;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _goHome();
       },
       child: CallbackShortcuts(
-        bindings: c == null ? const {} : _shortcuts(c),
+        bindings: c == null ? const {} : _shortcuts(c, pane),
         child: Focus(
           autofocus: true,
           child: Scaffold(
@@ -252,9 +333,9 @@ class _EditorScreenState extends State<EditorScreen> {
                   tabs: tabs,
                   onHome: _goHome,
                   onCloseTab: _closeTab,
-                  // The document actions are only shown while a tab is active.
+                  // The document actions work on the focused pane's notebook.
                   onPaste: () {
-                    if (c != null) _paste(c);
+                    if (c != null) _paste(c, pane);
                   },
                   onClear: () {
                     if (c != null) _confirmClear(c);
@@ -264,15 +345,8 @@ class _EditorScreenState extends State<EditorScreen> {
                   },
                   exporting: _exporting,
                 ),
-                Expanded(
-                  // No tab: the last one is closing, the library comes back in a moment.
-                  child: c == null
-                      ? const SizedBox.expand()
-                      : ListenableBuilder(
-                          listenable: c,
-                          builder: (context, _) => _body(c),
-                        ),
-                ),
+                // No tab: the last one is closing, the library comes back in a moment.
+                Expanded(child: tabs.active == null ? const SizedBox.expand() : _workspace()),
               ],
             ),
           ),
@@ -281,71 +355,153 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  Widget _body(EditorController c) {
+  /// Width of the left pane for a split screen [width] wide.
+  double _leftPaneWidth(double width) {
+    final available = math.max(0.0, width - SplitDivider.width);
+    final min = math.min(_minPaneWidth, available / 2);
+    return (available * tabs.splitRatio).clamp(min, available - min);
+  }
+
+  /// The panes side by side, with the shared toolbar, the pinned boxes and (while a tab is
+  /// dragged) the drop zones floating over their canvases.
+  Widget _workspace() => SafeArea(
+    top: false,
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final left = tabs.active!;
+        final right = tabs.split;
+        final width = constraints.maxWidth;
+        final header = right == null ? 0.0 : PaneHeader.height;
+        final area = Size(width, math.max(0.0, constraints.maxHeight - header - CanvasStatusBar.height));
+        _canvasArea = area;
+        final focused = tabs.focused;
+        final available = math.max(1.0, width - SplitDivider.width);
+        return Stack(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(width: right == null ? width : _leftPaneWidth(width), child: _pane(EditorPane.primary, left)),
+                if (right != null) ...[
+                  SplitDivider(
+                    onDrag: (dx) => tabs.setSplitRatio(_leftPaneWidth(width) / available + dx / available),
+                    onReset: () => tabs.setSplitRatio(0.5),
+                  ),
+                  Expanded(child: _pane(EditorPane.secondary, right)),
+                ],
+              ],
+            ),
+            Positioned(
+              left: 0,
+              top: header,
+              width: area.width,
+              height: area.height,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: TabDropZones(
+                      split: tabs.isSplit,
+                      onDropLeft: (c) => tabs
+                        ..focusPane(EditorPane.primary)
+                        ..activate(tabs.tabs.indexOf(c)),
+                      onDropRight: tabs.splitRight,
+                    ),
+                  ),
+                  Positioned.fill(child: PinnedBoxesLayer(board: tabs.pins, bounds: area)),
+                  if (focused != null && focused.isOpen)
+                    DraggableToolbar(
+                      controller: focused,
+                      bounds: area,
+                      placement: _placement,
+                      onPlacementChanged: _onPlacementChanged,
+                      onObstructionChanged: _onToolbarObstruction,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+
+  /// One pane: (split screen only) its header, the notebook's canvas through the pane's
+  /// own view, and its status bar.
+  Widget _pane(EditorPane pane, EditorController c) {
+    final split = tabs.isSplit;
+    final focused = tabs.focusedPane == pane;
+    final lastPane = !split || pane == EditorPane.secondary;
+    return ListenableBuilder(
+      listenable: c,
+      builder: (context, _) => Column(
+        children: [
+          if (split)
+            PaneHeader(
+              controller: c,
+              focused: focused,
+              onFocus: () => tabs.focusPane(pane),
+              onClose: pane == EditorPane.secondary ? tabs.closeSplit : null,
+            ),
+          Expanded(child: _paneBody(pane, c, focused: focused)),
+          if (c.isOpen)
+            CanvasStatusBar(controller: c, pane: pane, sync: lastPane ? sync : null)
+          else
+            const ColoredBox(color: Color(0xFF252526), child: SizedBox(height: CanvasStatusBar.height, width: double.infinity)),
+        ],
+      ),
+    );
+  }
+
+  Widget _paneBody(EditorPane pane, EditorController c, {required bool focused}) {
     if (c.openError != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
-              const SizedBox(height: 12),
-              Text('"${c.title}" could not be opened', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              Text('${c.openError}', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60)),
-              const SizedBox(height: 16),
-              FilledButton(onPressed: () => _closeTab(c), child: const Text('Close tab')),
-            ],
+      return Listener(
+        onPointerDown: (_) => tabs.focusPane(pane),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+                const SizedBox(height: 12),
+                Text('"${c.title}" could not be opened', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                Text('${c.openError}', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60)),
+                const SizedBox(height: 16),
+                FilledButton(onPressed: () => _closeTab(c), child: const Text('Close tab')),
+              ],
+            ),
           ),
         ),
       );
     }
     if (!c.isOpen) return const Center(child: CircularProgressIndicator());
-    return SafeArea(
-      top: false,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final canvas = Size(constraints.maxWidth, constraints.maxHeight - CanvasStatusBar.height);
-          return Stack(
-            children: [
-              Positioned(
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: CanvasStatusBar.height,
-                child: ClipRect(
-                  // A tab switch starts a fresh canvas: no gesture carries over.
-                  child: NoteCanvas(
-                    key: ObjectKey(c),
-                    controller: c,
-                    onEditNote: (note, {isNew = false}) => _editNote(c, note, isNew: isNew),
-                    onMessage: _toast,
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 0,
-                top: 0,
-                width: canvas.width,
-                height: canvas.height,
-                child: Stack(
-                  children: [
-                    DraggableToolbar(
-                      controller: c,
-                      bounds: canvas,
-                      placement: _placement,
-                      onPlacementChanged: _onPlacementChanged,
-                      onObstructionChanged: _onToolbarObstruction,
-                    ),
-                  ],
-                ),
-              ),
-              Positioned(left: 0, right: 0, bottom: 0, child: CanvasStatusBar(controller: c, sync: sync)),
-            ],
-          );
-        },
-      ),
+    final other = tabs.notebookIn(pane == EditorPane.primary ? EditorPane.secondary : EditorPane.primary);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ClipRect(
+          // A tab switch starts a fresh canvas: no gesture carries over.
+          child: NoteCanvas(
+            key: ObjectKey(c),
+            controller: c,
+            pane: pane,
+            gate: _gate,
+            onFocus: () => tabs.focusPane(pane),
+            onPin: () => _pin(c, pane),
+            // The same notebook in both panes: its selection bar only in the focused one.
+            showSelectionActions: focused || !identical(other, c),
+            onEditNote: (note, {isNew = false}) => _editNote(c, note, isNew: isNew),
+            onMessage: _toast,
+          ),
+        ),
+        if (tabs.isSplit && focused)
+          IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(border: Border.all(color: const Color(0x668AB4F8), width: 1.5)),
+            ),
+          ),
+      ],
     );
   }
 }

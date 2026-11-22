@@ -63,6 +63,10 @@ class LiveLayer extends ChangeNotifier {
   Offset? eraserCursor;
   double eraserRadius = 12;
 
+  /// The view whose pointer the eraser cursor follows: a notebook shown in both panes of
+  /// the split screen draws it only where the pointer is (`null`: every view).
+  Object? eraserView;
+
   void setPreview(StrokeRender? r) {
     preview = r == null ? null : CachedStroke(r);
     notifyListeners();
@@ -78,9 +82,10 @@ class LiveLayer extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setEraser(Offset? p, double radius) {
+  void setEraser(Offset? p, double radius, {Object? view}) {
     eraserCursor = p;
     eraserRadius = radius;
+    eraserView = p == null ? null : view;
     notifyListeners();
   }
 
@@ -92,13 +97,27 @@ class LiveLayer extends ChangeNotifier {
   }
 }
 
+/// The halves of the split editor. Without a split, the notebook is in [primary].
+enum EditorPane {
+  /// Left pane (the whole editor when it is not split).
+  primary,
+
+  /// Right pane of the split screen.
+  secondary,
+}
+
 /// UI state of one open notebook + the bridge to the Rust engine. Every document
 /// mutation goes through the engine and comes back as a render / [SceneDelta] that
 /// patches [scene]. Edits are autosaved (debounced) into the notebook bundle.
 ///
-/// Several controllers can be open at once (editor tabs). Each owns an engine *slot*; the
-/// engine edits one document at a time, so every engine call here first points it at this
-/// notebook ([_bind]), and the async ones (load, save, export) name the slot explicitly.
+/// Several controllers can be open at once (editor tabs, and two side by side in the
+/// split screen). Each owns an engine *slot*; the engine edits one document at a time, so
+/// every engine call here first points it at this notebook ([_bind]), and the async ones
+/// (load, save, export) name the slot explicitly.
+///
+/// The same notebook can be shown in both panes: there is still one document, one scene
+/// and one undo history, seen through two [Viewport]s ([viewOf]) that scroll and zoom
+/// independently.
 class EditorController extends ChangeNotifier {
   EditorController({required this._entry, required this.library}) {
     PencilGrain.ensureLoaded().then((_) {
@@ -118,11 +137,16 @@ class EditorController extends ChangeNotifier {
   /// This notebook's document in the engine ([engine.activateDocument]).
   final int _slot = _nextSlot++;
 
-  /// [open] put a document into the engine ([dispose] frees it).
-  bool _started = false;
+  /// The engine holds this notebook's document ([dispose] frees it).
+  bool _installed = false;
 
   final SceneCache scene = SceneCache();
+
+  /// View of the left pane (the only one without a split screen).
   final Viewport viewport = Viewport();
+
+  /// View of the right pane, created when the notebook first appears there.
+  Viewport? _secondaryView;
   final LiveLayer live = LiveLayer();
   final ValueNotifier<SelectionPreview?> selectionPreview = ValueNotifier(null);
   final ValueNotifier<NotePreview?> notePreview = ValueNotifier(null);
@@ -143,7 +167,6 @@ class EditorController extends ChangeNotifier {
   int _pdfPageCount = 0;
   bool _opened = false;
   Object? _openError;
-  bool _initialFitPending = false;
   int _savedRevision = -1;
   int _thumbnailRevision = -1;
   Future<void> _saveChain = Future.value();
@@ -214,6 +237,31 @@ class EditorController extends ChangeNotifier {
   /// The single selected sticky note, if the selection is exactly one note.
   StickyNote? get singleSelectedNote => _selectedIds.length == 1 ? scene.note(_selectedIds.first) : null;
 
+  /// The view of [pane]: each pane of the split screen scrolls and zooms on its own, even
+  /// when both show this notebook.
+  Viewport viewOf(EditorPane pane) => switch (pane) {
+    EditorPane.primary => viewport,
+    EditorPane.secondary => _secondaryView ??= _newSecondaryView(),
+  };
+
+  Iterable<Viewport> get _views => [viewport, ?_secondaryView];
+
+  Viewport _newSecondaryView() {
+    final view = Viewport(insets: viewport.insets)..onReachEnd = _appendPageNear;
+    _applyExtent(view);
+    _startLikePrimary(view);
+    return view;
+  }
+
+  /// Puts the right pane's view where the left one is (fitted to its pane once laid out):
+  /// "split" on a notebook starts with the same page twice.
+  void alignSecondaryView() => _startLikePrimary(viewOf(EditorPane.secondary));
+
+  void _startLikePrimary(Viewport view) {
+    view.showSameAs(viewport);
+    view.fitWhenLaidOut(top: viewport.offset.dy);
+  }
+
   /// 0-based page under world Y (`null` for whiteboards).
   int? pageIndexAt(double y) {
     if (!isPaged || _pages.isEmpty) return null;
@@ -225,7 +273,6 @@ class EditorController extends ChangeNotifier {
   /// Loads the notebook into the engine (or creates / imports it the first time) and makes
   /// it the document the engine works on.
   Future<void> open() async {
-    _started = true;
     try {
       final doc = _entry.documentFile;
       final pdfFile = _entry.isPdf ? _entry.pdfFile : null;
@@ -238,6 +285,7 @@ class EditorController extends ChangeNotifier {
       } else {
         info = engine.newDocument(slot: _slot, kind: _entry.meta.kind, paper: _entry.meta.paper);
       }
+      _installed = true;
       if (_disposed) {
         // The tab was closed while loading: the load finished afterwards, free it again.
         engine.closeDocument(slot: _slot);
@@ -253,7 +301,7 @@ class EditorController extends ChangeNotifier {
         _pdf = PdfBackgrounds(pdfFile.path)..open();
       }
       _opened = true;
-      _initialFitPending = true;
+      viewport.fitWhenLaidOut();
     } catch (e) {
       _openError = e;
     }
@@ -315,13 +363,6 @@ class EditorController extends ChangeNotifier {
   void adoptInputMode(EditorController other) {
     _stylusDetected = other._stylusDetected;
     _stylusOnly = other._stylusOnly;
-  }
-
-  /// `true` exactly once after opening: the canvas then fits the page width.
-  bool takeInitialFit() {
-    final pending = _initialFitPending;
-    _initialFitPending = false;
-    return pending;
   }
 
   /// Saves pending edits (serialised: concurrent calls queue up). With [thumbnail], also
@@ -427,13 +468,18 @@ class EditorController extends ChangeNotifier {
 
   void _setPages(List<CanvasPage> pages) {
     _pages = pages;
-    if (isPaged && pages.isNotEmpty) {
-      final last = pages.last;
-      viewport.setContentExtent(width: last.width, height: last.top + last.height);
-    } else {
-      viewport.setContentExtent();
-    }
+    // A page appended through one pane extends the other one's scroll range too.
+    _views.forEach(_applyExtent);
     scene.markDirty();
+  }
+
+  void _applyExtent(Viewport view) {
+    if (isPaged && _pages.isNotEmpty) {
+      final last = _pages.last;
+      view.setContentExtent(width: last.width, height: last.top + last.height);
+    } else {
+      view.setContentExtent();
+    }
   }
 
   /// Refreshes the page list when an edit appended pages.
@@ -585,8 +631,9 @@ class EditorController extends ChangeNotifier {
 
   double get eraserRadius => brushFor(EditorTool.eraser).width / 2;
 
-  /// Erases along the eraser's movement from [from] to [to] with the current mode.
-  void eraseAlong(Offset from, Offset to) {
+  /// Erases along the eraser's movement from [from] to [to] with the current mode. The
+  /// eraser cursor is drawn in [view] (the pane the pointer is in).
+  void eraseAlong(Offset from, Offset to, {Viewport? view}) {
     if (!_bind()) return;
     final delta = engine.eraseAlong(
       x0: from.dx,
@@ -596,7 +643,7 @@ class EditorController extends ChangeNotifier {
       radius: eraserRadius,
       mode: _eraserMode,
     );
-    live.setEraser(to, eraserRadius);
+    live.setEraser(to, eraserRadius, view: view);
     if (delta.removedIds.isEmpty && delta.upsertedStrokes.isEmpty) return;
     scene.applyDelta(delta);
     final bounds = delta.selection.bounds?.toRect();
@@ -726,11 +773,14 @@ class EditorController extends ChangeNotifier {
     _autosave?.cancel();
     // Frees the engine document (with its undo history). Unsaved edits are gone: call
     // [close] first to keep them.
-    if (_started) engine.closeDocument(slot: _slot);
-    viewport.onReachEnd = null;
+    if (_installed) engine.closeDocument(slot: _slot);
+    for (final view in _views) {
+      view
+        ..onReachEnd = null
+        ..dispose();
+    }
     _pdf?.dispose();
     scene.dispose();
-    viewport.dispose();
     live.dispose();
     selectionPreview.dispose();
     notePreview.dispose();

@@ -26,10 +26,11 @@ easynotes/
     └── lib/
         ├── main.dart               dark "smokey" theme, opens the library
         ├── screens/                home_screen.dart (library), editor_screen.dart
-        ├── widgets/                draggable_toolbar.dart, canvas_status_bar.dart, editor_app_bar.dart,
+        ├── widgets/                draggable_toolbar.dart, canvas_status_bar.dart, editor_app_bar.dart, split_view.dart,
+        │                           pinned_overlay.dart (pinned reference cards),
         │                           sync_widgets.dart (account button, backup status chip)
         └── src/
-            ├── editor/             EditorController (engine calls, open/autosave), OpenNotebooks (tabs), tools
+            ├── editor/             EditorController (engine calls, open/autosave), OpenNotebooks (tabs, split), PinBoard, tools
             ├── canvas/             NoteCanvas (input), painters (pages, PDF layer, ink), viewport, scene cache
             ├── services/           library (folders/notebooks on disk), PDF rasteriser (pdfrx), export/share
             ├── sync/               Google sign-in (google_auth, session_store), Drive backup
@@ -51,6 +52,17 @@ easynotes/
   - Closing a tab saves it, drops its blank trailing pages and refreshes its thumbnail. Closing the last one returns to the library.
   - Renaming or moving a notebook (or its folder) in the library moves its open tab along. Deleting it closes the tab.
   - The clipboard is shared, so you can copy in one tab and paste in another.
+- **Split screen.** Shows two panes side by side: two notebooks (a textbook PDF next to your notes), or the same notebook twice (page 1 next to page 12).
+  - To open it: use the split button in the top bar or Ctrl+\ (Cmd+\ on macOS); right-click or long-press a tab and pick **Split right**; or drag a tab onto the right half of the canvas.
+  - Each pane has its own scroll position, zoom and page, and its own status bar. The divider can be dragged (each pane keeps at least 20 % of the width), and a double-click on it restores 50 / 50.
+  - The floating toolbar, the keyboard shortcuts and the tab bar work on the **focused** pane, the one last touched. It has a highlighted header and an outline; in the tab bar, the other pane's notebook is underlined more faintly.
+  - Only one pane takes pen or touch input at a time, so a palm resting on the other pane is ignored while you write.
+  - The × in the right pane's header closes the split; its notebook stays open as a tab.
+- **Pin to screen.** The **Pin** button in the selection bar turns the selected strokes and notes, on their page background, into a sharp floating card. It is rendered at up to 3× the screen resolution.
+  - Cards stay fixed on screen while the pages scroll and while you switch tabs or panes, so a formula or diagram stays in view as you work further down.
+  - Drag a card by its header and resize it from its bottom-right corner (it keeps its aspect ratio). The header's drop button switches between 100 % and 75 % opacity, and × unpins.
+  - Several cards can be open at once.
+  - Pins live only in the editor session: they are never written into the notebook, its undo history or exported PDFs.
 - **Pages.** Notebook pages are exactly 1000 × 1000 units, stacked with no gap (page *n* spans y ∈ [1000·n, 1000·(n+1))).
   - **Continuous pages.** Any downward scroll (touch, trackpad, pinch, mouse wheel) that brings the bottom of the view within 50 units of the end of the last page (`Y ≥ N·1000 − 50`) appends page N+1 directly beneath it, one page per scroll step.
   - The pen does the same: writing into the last 50 units of the last page opens the next page under it.
@@ -122,6 +134,9 @@ easynotes/
   - Each open document has its own history: undo in one tab never touches another.
   - Pages and the paper style are not part of the history: pages appended for content stay (unused trailing pages are still trimmed on close), and a redo appends pages again if needed.
 - **Open documents as slots.** The engine edits one document at a time. Each open tab owns a *slot* in `document/workspace.rs`, and switching tabs moves the engines (`activate_document`), so a 500-page notebook switches as fast as an empty one. Parked documents keep everything, even an unfinished stroke. Every synchronous call of a tab's `EditorController` first points the engine at its slot, so a background tab's autosave can never write into the visible one. The async calls (load, import, save, export) run later on a worker thread and name their slot explicitly.
+  - The split screen needs no extra engine API. Two notebooks side by side are two slots, and each pane's calls bind their own slot first, so the panes can interleave call by call, even with two strokes in progress.
+  - The same notebook in both panes is one slot (one document, history and selection) seen through two Dart `Viewport`s. Scroll, zoom and the visible page live in the UI.
+  - A shared input gate admits one edit gesture at a time, so the engine never receives two strokes for one document.
 - **Rust is authoritative for layout.** `DocumentInfo.pages` (top, height, `pdf_page`) drives the Flutter painter, the viewport extent and the PDF exporter. Paper patterns restart at each page's top, identically on screen and in the PDF.
 - **Persistence.** A notebook is a folder `Name.enote/` containing:
   - `content.ezn`: the engine document, `EZNOTE\x01\n` + zlib(JSON). Enums are stored as strings and coordinates rounded to 0.01. It is written atomically (temp file + rename).
@@ -139,7 +154,7 @@ easynotes/
 | Finger | Stylus-only on: one finger pans, two fingers pinch-zoom. Stylus-only off: one finger draws, two fingers navigate. Toggle in the top bar. |
 | Finger / pen on selection | Drag inside the box to move it, drag a corner handle to resize (Shift keeps the ratio). |
 | Mouse | Left button draws. Right/middle drag pans. Wheel scrolls (Shift = horizontal; reaching the end of the last page appends one); Ctrl+wheel zooms. Trackpad pinch zooms. |
-| Keyboard | Ctrl+Z (undo), Ctrl+Y / Ctrl+Shift+Z (redo), Ctrl+C / X / V / D, Del, Esc, Ctrl+S (save), Ctrl+0 (reset zoom), Ctrl+Tab / Ctrl+Shift+Tab (next / previous tab); Cmd instead of Ctrl on macOS, except for the tab keys |
+| Keyboard | Ctrl+Z (undo), Ctrl+Y / Ctrl+Shift+Z (redo), Ctrl+C / X / V / D, Del, Esc, Ctrl+S (save), Ctrl+0 (reset zoom), Ctrl+Tab / Ctrl+Shift+Tab (next / previous tab), Ctrl+\ (split screen on / off); all act on the focused pane. Cmd instead of Ctrl on macOS, except for the tab keys |
 
 ## Running it
 
@@ -191,7 +206,7 @@ Tests:
 ```bash
 cd rust_engine && cargo test                                  # 97 engine unit tests (add --release for the timing assert)
 cd flutter_app && flutter test                                # viewport/paging, library, toolbar, editor chrome, Drive backup + sync (fake Drive)
-cd flutter_app && flutter test integration_test -d windows    # end-to-end through the FFI bridge, incl. the editor, tabs and library
+cd flutter_app && flutter test integration_test -d windows    # end-to-end through the FFI bridge, incl. the editor, tabs, split screen, pins and library
 ```
 
 `pdfrx` builds a small C helper through Dart native assets. `native_toolchain_c` ≥ 0.19.6 is needed when the pub cache path contains spaces (`C:\Users\First Last\...`); the lock file pins it.

@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Viewport;
 import 'package:flutter/services.dart';
 
 import '../editor/editor_controller.dart';
@@ -10,8 +10,25 @@ import '../rust/geometry/sticky_note.dart';
 import '../ui/selection_actions.dart';
 import 'painters.dart';
 import 'scene_cache.dart';
+import 'viewport.dart';
 
 enum _Mode { idle, drawing, erasing, lasso, box, transform, noteMove, noteResize, noteCreate, navigate }
+
+/// Lets one canvas at a time edit (split screen): while the pen writes, erases, selects
+/// or drags in one pane, the other pane ignores new touches, so a palm resting on it
+/// neither draws nor scrolls there, and two strokes never run into one document at once.
+class CanvasInputGate {
+  Object? _holder;
+
+  /// Another canvas is in the middle of an edit gesture.
+  bool isHeldByOther(Object canvas) => _holder != null && !identical(_holder, canvas);
+
+  void hold(Object canvas) => _holder ??= canvas;
+
+  void release(Object canvas) {
+    if (identical(_holder, canvas)) _holder = null;
+  }
+}
 
 /// The page canvas. All input arrives through one raw [Listener] so we fully control
 /// the routing between devices:
@@ -21,10 +38,40 @@ enum _Mode { idle, drawing, erasing, lasso, box, transform, noteMove, noteResize
 ///   its handles moves / resizes it. Fingers only draw while "stylus only" is off, and are
 ///   ignored entirely while a pen stroke is in progress (palm rejection).
 /// * **Mouse wheel / trackpad** – scroll and Ctrl+wheel / pinch to zoom.
+///
+/// In the split screen there is one canvas per pane, each looking at its notebook through
+/// the pane's own view ([EditorController.viewOf]); both panes may show the same notebook.
 class NoteCanvas extends StatefulWidget {
-  const NoteCanvas({super.key, required this.controller, required this.onEditNote, required this.onMessage});
+  const NoteCanvas({
+    super.key,
+    required this.controller,
+    required this.onEditNote,
+    required this.onMessage,
+    this.pane = EditorPane.primary,
+    this.gate,
+    this.onFocus,
+    this.onPin,
+    this.showSelectionActions = true,
+  });
 
   final EditorController controller;
+
+  /// Which view of the notebook this canvas shows.
+  final EditorPane pane;
+
+  /// Shared by the canvases of the split screen (see [CanvasInputGate]).
+  final CanvasInputGate? gate;
+
+  /// The user started something in this canvas (pen, mouse or finger down): its pane is
+  /// now the one the toolbar works on.
+  final VoidCallback? onFocus;
+
+  /// "Pin" in the selection bar: pin the selection over the screen. Hidden when `null`.
+  final VoidCallback? onPin;
+
+  /// Whether the selection's action bar is shown here (only in the focused pane when the
+  /// same notebook is in both).
+  final bool showSelectionActions;
 
   /// Opens the note editor; `isNew` notes are deleted if the user cancels with no text.
   final Future<void> Function(StickyNote note, {bool isNew}) onEditNote;
@@ -39,6 +86,9 @@ class _NoteCanvasState extends State<NoteCanvas> {
   static const double _noteResizeGrip = 28;
 
   EditorController get c => widget.controller;
+
+  /// This pane's view of the notebook.
+  Viewport get vp => c.viewOf(widget.pane);
 
   _Mode _mode = _Mode.idle;
   int? _pointer;
@@ -68,7 +118,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
 
   // ------------------------------------------------------------------ helpers
 
-  Offset _world(Offset screen) => c.viewport.screenToWorld(screen);
+  Offset _world(Offset screen) => vp.screenToWorld(screen);
 
   static bool _isStylus(PointerDeviceKind k) => k == PointerDeviceKind.stylus || k == PointerDeviceKind.invertedStylus;
 
@@ -87,6 +137,10 @@ class _NoteCanvasState extends State<NoteCanvas> {
 
   void _onDown(PointerDownEvent e) {
     final kind = e.kind;
+    // Split screen: the other pane is mid-gesture, so this is a palm or a stray touch.
+    final gate = widget.gate;
+    if (gate != null && gate.isHeldByOther(this)) return;
+    widget.onFocus?.call();
     if (_isStylus(kind) && c.registerStylus()) {
       widget.onMessage('Stylus detected — the pen draws, fingers pan & zoom.');
     }
@@ -102,7 +156,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
       if (_mode != _Mode.idle && _mode != _Mode.navigate && _pointerKind == PointerDeviceKind.touch) {
         // A second finger while finger-drawing / selecting → abort it and navigate.
         final first = _pointer!;
-        final lastPos = c.viewport.worldToScreen(_lastWorld ?? _downWorld);
+        final lastPos = vp.worldToScreen(_lastWorld ?? _downWorld);
         _abortGesture();
         _navPointers[first] = lastPos;
         _mode = _Mode.navigate;
@@ -137,7 +191,9 @@ class _NoteCanvasState extends State<NoteCanvas> {
 
   Offset? _lastWorld;
 
+  /// Starts an edit gesture with [e]'s pointer (the other pane waits until it ends).
   void _track(PointerEvent e) {
+    widget.gate?.hold(this);
     _pointer = e.pointer;
     _pointerKind = e.kind;
     _downScreen = e.localPosition;
@@ -162,7 +218,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
         _lastEraser = world;
         // Everything one eraser drag removes or cuts is a single undo step.
         c.beginHistoryGroup();
-        c.eraseAlong(world, world);
+        c.eraseAlong(world, world, view: vp);
       case EditorTool.lasso:
         _mode = _Mode.lasso;
         c.live.clear();
@@ -178,7 +234,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
   bool _tryBeginTransform(PointerDownEvent e) {
     if (!c.hasSelection) return false;
     final slop = e.kind == PointerDeviceKind.touch ? 24.0 : 14.0;
-    final handle = SelectionOverlayPainter.hitTestSelection(c, e.localPosition, slop: slop);
+    final handle = SelectionOverlayPainter.hitTestSelection(c, vp, e.localPosition, slop: slop);
     if (handle == null) return false;
     _track(e);
     _handle = handle;
@@ -193,7 +249,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
     if (note == null) return false;
     _track(e);
     _note = note;
-    final bottomRight = c.viewport.worldToScreen(note.rect.bottomRight);
+    final bottomRight = vp.worldToScreen(note.rect.bottomRight);
     _mode = (bottomRight - e.localPosition).distance <= _noteResizeGrip ? _Mode.noteResize : _Mode.noteMove;
     return true;
   }
@@ -225,7 +281,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
       case _Mode.drawing:
         c.addPoint(world, _pressure(e));
       case _Mode.erasing:
-        c.eraseAlong(_lastEraser ?? world, world);
+        c.eraseAlong(_lastEraser ?? world, world, view: vp);
         _lastEraser = world;
       case _Mode.lasso:
         c.live.addLassoPoint(world);
@@ -256,7 +312,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
       final newSpread = _spread(_navPointers.values, newFocal);
       if (oldSpread > 1) scale = newSpread / oldSpread;
     }
-    c.viewport.pinch(focalScreen: newFocal, scaleFactor: scale, focalDelta: newFocal - oldFocal);
+    vp.pinch(focalScreen: newFocal, scaleFactor: scale, focalDelta: newFocal - oldFocal);
   }
 
   static Offset _centroid(Iterable<Offset> pts) {
@@ -333,7 +389,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
     }
     if (e.pointer != _pointer) return;
     final world = _world(e.localPosition);
-    final tolerance = (e.kind == PointerDeviceKind.touch ? 16 : 8) / c.viewport.scale;
+    final tolerance = (e.kind == PointerDeviceKind.touch ? 16 : 8) / vp.scale;
 
     switch (_mode) {
       case _Mode.drawing:
@@ -449,15 +505,31 @@ class _NoteCanvasState extends State<NoteCanvas> {
     _note = null;
     _lastWorld = null;
     _lastEraser = null;
+    widget.gate?.release(this);
+  }
+
+  @override
+  void dispose() {
+    // The pane switched notebooks mid-gesture: let the other pane take input again.
+    widget.gate?.release(this);
+    super.dispose();
   }
 
   // ------------------------------------------------------------------ hover / wheel / trackpad
 
   void _onHover(PointerHoverEvent e) {
     if (c.tool == EditorTool.eraser || e.kind == PointerDeviceKind.invertedStylus) {
-      c.live.setEraser(_world(e.localPosition), c.eraserRadius);
+      c.live.setEraser(_world(e.localPosition), c.eraserRadius, view: vp);
     } else if (c.live.eraserCursor != null) {
       c.live.setEraser(null, c.eraserRadius);
+    }
+  }
+
+  /// The pointer left this pane: its eraser cursor goes (the other pane may draw its own).
+  void _onExit(PointerExitEvent e) {
+    final live = c.live;
+    if (live.eraserCursor != null && identical(live.eraserView, vp) && _mode != _Mode.erasing) {
+      live.setEraser(null, c.eraserRadius);
     }
   }
 
@@ -466,14 +538,14 @@ class _NoteCanvasState extends State<NoteCanvas> {
       final keys = HardwareKeyboard.instance;
       if (keys.isControlPressed || keys.isMetaPressed) {
         final factor = math.exp(-e.scrollDelta.dy / 400);
-        c.viewport.zoomAt(e.localPosition, c.viewport.scale * factor);
+        vp.zoomAt(e.localPosition, vp.scale * factor);
       } else if (keys.isShiftPressed) {
-        c.viewport.panBy(Offset(-e.scrollDelta.dy, -e.scrollDelta.dx));
+        vp.panBy(Offset(-e.scrollDelta.dy, -e.scrollDelta.dx));
       } else {
-        c.viewport.panBy(-e.scrollDelta);
+        vp.panBy(-e.scrollDelta);
       }
     } else if (e is PointerScaleEvent) {
-      c.viewport.zoomAt(e.localPosition, c.viewport.scale * e.scale);
+      vp.zoomAt(e.localPosition, vp.scale * e.scale);
     }
   }
 
@@ -482,7 +554,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
   void _onPanZoomUpdate(PointerPanZoomUpdateEvent e) {
     final factor = _lastTrackpadScale == 0 ? 1.0 : e.scale / _lastTrackpadScale;
     _lastTrackpadScale = e.scale;
-    c.viewport.pinch(focalScreen: e.localPosition, scaleFactor: factor, focalDelta: e.localPanDelta);
+    vp.pinch(focalScreen: e.localPosition, scaleFactor: factor, focalDelta: e.localPanDelta);
   }
 
   // ------------------------------------------------------------------ build
@@ -497,22 +569,28 @@ class _NoteCanvasState extends State<NoteCanvas> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        c.viewport.setViewportSize(constraints.biggest);
+        final view = vp;
+        view.setViewportSize(constraints.biggest);
         c.devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
-        if (c.takeInitialFit()) {
+        // Just opened, or the split screen changed this pane's width: fit the page.
+        final fit = view.takePendingFit();
+        if (fit != null) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) c.viewport.fitPageWidth();
+            if (mounted) view.fitPageWidth(top: fit.top);
           });
         }
         return ListenableBuilder(
-        listenable: Listenable.merge([c, c.viewport, c.selectionPreview]),
+        listenable: Listenable.merge([c, view, c.selectionPreview]),
         builder: (context, _) {
-          final selRect = c.selectionPreview.value == null ? SelectionOverlayPainter.screenRect(c) : null;
+          final selRect = widget.showSelectionActions && c.selectionPreview.value == null
+              ? SelectionOverlayPainter.screenRect(c, view)
+              : null;
           return Stack(
             fit: StackFit.expand,
             children: [
               MouseRegion(
                 cursor: _cursor,
+                onExit: _onExit,
                 // A pointer that went down before a tab switch keeps reporting to this (then
                 // disposed) canvas: those late events must not edit the hidden notebook.
                 child: Listener(
@@ -534,9 +612,9 @@ class _NoteCanvasState extends State<NoteCanvas> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      RepaintBoundary(child: CustomPaint(painter: ScenePainter(c))),
-                      RepaintBoundary(child: CustomPaint(painter: LivePainter(c))),
-                      CustomPaint(painter: SelectionOverlayPainter(c)),
+                      RepaintBoundary(child: CustomPaint(painter: ScenePainter(c, view))),
+                      RepaintBoundary(child: CustomPaint(painter: LivePainter(c, view))),
+                      CustomPaint(painter: SelectionOverlayPainter(c, view)),
                     ],
                   ),
                 ),
@@ -547,6 +625,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
                   selectionScreenRect: selRect,
                   canvasSize: constraints.biggest,
                   onEditNote: (note) => widget.onEditNote(note),
+                  onPin: widget.onPin,
                 ),
             ],
           );

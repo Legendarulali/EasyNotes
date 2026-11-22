@@ -8,6 +8,7 @@ import '../editor/editor_controller.dart';
 import '../rust/document/page.dart';
 import 'scene_cache.dart';
 import 'stroke_renderer.dart';
+import 'viewport.dart';
 
 /// Smokey "desk" around the pages of paged documents.
 const Color kDeskColor = Color(0xFF1E1E1E);
@@ -18,30 +19,36 @@ const Color _pageNumberColor = Color(0x66000000);
 /// is already in world coordinates: page backgrounds (paper pattern or imported PDF
 /// page), sticky notes, highlighters (beneath) and ink.
 ///
-/// Shared by the on-screen [ScenePainter] and [renderThumbnail]. [pixelRatio] is device
-/// pixels per world unit (decides the PDF raster resolution).
+/// Shared by the on-screen [ScenePainter], [renderThumbnail] and pinned snapshots
+/// ([renderArea]). [pixelRatio] is device pixels per world unit (decides the PDF raster
+/// resolution). [interactive] paints the on-screen extras (page decorations, transform
+/// previews) and lets [view] (the pane painting) ask for PDF rasters; with [only], just
+/// those items are drawn over the page background.
 void paintDocument(
   Canvas canvas,
   EditorController c,
   Rect visible, {
   required double pixelRatio,
   bool interactive = true,
+  Set<String>? only,
+  Object? view,
 }) {
   final scene = c.scene;
   final preview = interactive ? c.selectionPreview.value : null;
   final selected = preview == null ? const <String>{} : c.selectedIds.toSet();
   final notePreview = interactive ? c.notePreview.value : null;
+  bool skip(String id) => selected.contains(id) || (only != null && !only.contains(id));
 
   // Background in the same layer so the highlighter's multiply blend sees the paper.
   if (c.isPaged) {
-    _paintPages(canvas, c, visible, pixelRatio: pixelRatio, decorations: interactive);
+    _paintPages(canvas, c, visible, pixelRatio: pixelRatio, onScreen: interactive, view: view);
   } else {
     paintPaper(canvas, visible, c.paperSpec);
   }
 
   // Sticky notes sit beneath the ink so you can annotate on top of them.
   for (final note in scene.notes) {
-    if (selected.contains(note.id)) continue;
+    if (skip(note.id)) continue;
     final rect = notePreview?.id == note.id ? notePreview!.rect : note.rect;
     if (!rect.overlaps(visible)) continue;
     drawStickyNote(canvas, note, scene.noteTextPainter(note, width: rect.width), rect: rect);
@@ -50,7 +57,7 @@ void paintDocument(
   // Highlighters first (beneath), then pens / pencils.
   for (final pass in const [true, false]) {
     for (final s in scene.strokes) {
-      if (s.isHighlighter != pass || selected.contains(s.id) || !s.bounds.overlaps(visible)) continue;
+      if (s.isHighlighter != pass || skip(s.id) || !s.bounds.overlaps(visible)) continue;
       drawStrokePath(canvas, s.path, s.render);
     }
   }
@@ -87,7 +94,17 @@ int firstPageAt(List<CanvasPage> pages, double y) {
   return lo;
 }
 
-void _paintPages(Canvas canvas, EditorController c, Rect visible, {required double pixelRatio, required bool decorations}) {
+/// [onScreen]: a pane of the editor is painting (decorations; PDF rasters are requested
+/// for, and kept for, [view]). Off-screen renders use whatever rasters exist.
+void _paintPages(
+  Canvas canvas,
+  EditorController c,
+  Rect visible, {
+  required double pixelRatio,
+  required bool onScreen,
+  Object? view,
+}) {
+  final decorations = onScreen;
   final pages = c.pages;
   final pdf = c.pdfBackgrounds;
   final visiblePdf = <int>{};
@@ -107,7 +124,7 @@ void _paintPages(Canvas canvas, EditorController c, Rect visible, {required doub
     if (pdfPage != null) {
       canvas.drawRect(area, Paint()..color = const Color(0xFFFFFFFF));
       visiblePdf.add(pdfPage);
-      pdf?.request(pdfPage, p.width * pixelRatio);
+      if (onScreen) pdf?.request(pdfPage, p.width * pixelRatio);
       final img = pdf?.image(pdfPage);
       if (img != null) {
         canvas.drawImageRect(
@@ -137,7 +154,7 @@ void _paintPages(Canvas canvas, EditorController c, Rect visible, {required doub
       label.paint(canvas, Offset(p.width - label.width - 16, p.top + p.height - label.height - 12));
     }
   }
-  pdf?.setVisible(visiblePdf);
+  if (onScreen) pdf?.setVisible(visiblePdf, view: view);
 }
 
 final Map<int, TextPainter> _pageLabels = {};
@@ -160,14 +177,15 @@ TextPainter _pageLabel(int number) {
   )..layout();
 }
 
-/// Committed content. Repaints only when the scene, viewport, PDF rasters or a transform
-/// preview change – never while a stroke is being drawn (that's the [LivePainter]'s job).
+/// Committed content seen through [viewport] (one pane). Repaints only when the scene,
+/// viewport, PDF rasters or a transform preview change – never while a stroke is being
+/// drawn (that's the [LivePainter]'s job).
 class ScenePainter extends CustomPainter {
-  ScenePainter(this.controller)
+  ScenePainter(this.controller, this.viewport)
     : super(
         repaint: Listenable.merge([
           controller.scene,
-          controller.viewport,
+          viewport,
           controller.selectionPreview,
           controller.notePreview,
           controller.pdfBackgrounds,
@@ -175,10 +193,11 @@ class ScenePainter extends CustomPainter {
       );
 
   final EditorController controller;
+  final Viewport viewport;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final vp = controller.viewport;
+    final vp = viewport;
     canvas.save();
     canvas.clipRect(Offset.zero & size);
     if (controller.isPaged) canvas.drawRect(Offset.zero & size, Paint()..color = kDeskColor);
@@ -188,12 +207,33 @@ class ScenePainter extends CustomPainter {
       controller,
       vp.visibleWorldRect(size),
       pixelRatio: vp.scale * controller.devicePixelRatio,
+      view: vp,
     );
     canvas.restore();
   }
 
   @override
-  bool shouldRepaint(covariant ScenePainter old) => old.controller != controller;
+  bool shouldRepaint(covariant ScenePainter old) => old.controller != controller || old.viewport != viewport;
+}
+
+/// Renders the world rectangle [area] of the document at [scale] pixels per world unit:
+/// the page background plus the items in [only] (every item when `null`), without the
+/// on-screen decorations. Used for thumbnails and pinned snapshots.
+Future<ui.Image> renderArea(EditorController c, Rect area, {required double scale, Set<String>? only}) async {
+  final width = math.max(1, (area.width * scale).round());
+  final height = math.max(1, (area.height * scale).round());
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.scale(scale);
+  canvas.translate(-area.left, -area.top);
+  canvas.clipRect(area);
+  paintDocument(canvas, c, area, pixelRatio: scale, interactive: false, only: only);
+  final picture = recorder.endRecording();
+  try {
+    return await picture.toImage(width, height);
+  } finally {
+    picture.dispose();
+  }
 }
 
 /// Renders a PNG preview of the first page (or the top-left of a whiteboard) for the
@@ -208,16 +248,7 @@ Future<Uint8List?> renderThumbnail(EditorController c, {int width = 360}) async 
     final side = b == null ? 1000.0 : math.max(b.right, b.bottom / 0.75).clamp(600.0, 4000.0);
     area = Rect.fromLTWH(0, 0, side, side * 0.75);
   }
-  final scale = width / area.width;
-  final height = math.max(1, (area.height * scale).round());
-  final recorder = ui.PictureRecorder();
-  final canvas = Canvas(recorder);
-  canvas.scale(scale);
-  canvas.clipRect(area);
-  paintDocument(canvas, c, area, pixelRatio: scale, interactive: false);
-  final picture = recorder.endRecording();
-  final image = await picture.toImage(width, height);
-  picture.dispose();
+  final image = await renderArea(c, area, scale: width / area.width);
   try {
     final data = await image.toByteData(format: ui.ImageByteFormat.png);
     return data?.buffer.asUint8List();
@@ -226,16 +257,36 @@ Future<Uint8List?> renderThumbnail(EditorController c, {int width = 360}) async 
   }
 }
 
-/// Stroke in progress, lasso / box marquee and eraser cursor.
+/// World area a pinned snapshot of the selection [bounds] shows: the selection with a
+/// small margin, kept on the page column (paged documents) and off negative coordinates.
+Rect pinAreaFor(EditorController c, Rect bounds, {double margin = 16}) {
+  final r = bounds.inflate(margin);
+  final w = c.viewport.contentWidth;
+  final h = c.viewport.contentHeight;
+  final left = math.max(0.0, r.left);
+  final top = math.max(0.0, r.top);
+  final right = w == null ? r.right : math.min(r.right, w);
+  final bottom = h == null ? r.bottom : math.min(r.bottom, h);
+  return Rect.fromLTRB(left, top, math.max(right, left + 1), math.max(bottom, top + 1));
+}
+
+/// Pixels per world unit of a pinned snapshot of [area]: 3 device pixels per unit, so the
+/// pin stays sharp when it is enlarged or the page is zoomed in, but at most 4096 pixels
+/// on the longest side.
+double pinRenderScale(Rect area, double devicePixelRatio) =>
+    math.min(3 * math.max(1.0, devicePixelRatio), 4096 / math.max(1.0, area.longestSide));
+
+/// Stroke in progress, lasso / box marquee and eraser cursor, seen through [viewport].
 class LivePainter extends CustomPainter {
-  LivePainter(this.controller) : super(repaint: Listenable.merge([controller.live, controller.viewport]));
+  LivePainter(this.controller, this.viewport) : super(repaint: Listenable.merge([controller.live, viewport]));
 
   final EditorController controller;
+  final Viewport viewport;
 
   @override
   void paint(Canvas canvas, Size size) {
     final live = controller.live;
-    final vp = controller.viewport;
+    final vp = viewport;
     canvas.save();
     canvas.clipRect(Offset.zero & size);
     vp.applyTo(canvas);
@@ -256,7 +307,8 @@ class LivePainter extends CustomPainter {
       _drawDashedPath(canvas, ui.Path()..addRect(box), accent, hairline, 6 / vp.scale);
     }
     final eraser = live.eraserCursor;
-    if (eraser != null) {
+    final eraserHere = live.eraserView == null || identical(live.eraserView, vp);
+    if (eraser != null && eraserHere) {
       canvas.drawCircle(eraser, live.eraserRadius, Paint()..color = const Color(0x22000000));
       canvas.drawCircle(
         eraser,
@@ -271,7 +323,7 @@ class LivePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant LivePainter old) => old.controller != controller;
+  bool shouldRepaint(covariant LivePainter old) => old.controller != controller || old.viewport != viewport;
 }
 
 /// Corner handle positions of a selection rectangle.
@@ -280,17 +332,18 @@ enum SelectionHandle { move, topLeft, topRight, bottomLeft, bottomRight }
 /// Dotted selection box + resize handles, drawn in screen space so handles keep a
 /// constant on-screen size at any zoom.
 class SelectionOverlayPainter extends CustomPainter {
-  SelectionOverlayPainter(this.controller)
-    : super(repaint: Listenable.merge([controller, controller.viewport, controller.selectionPreview]));
+  SelectionOverlayPainter(this.controller, this.viewport)
+    : super(repaint: Listenable.merge([controller, viewport, controller.selectionPreview]));
 
   final EditorController controller;
+  final Viewport viewport;
   static const double handleRadius = 7;
 
-  /// Screen rect of the selection (including an in-flight preview), or `null`.
-  static Rect? screenRect(EditorController c) {
+  /// Screen rect (in [view]) of the selection (including an in-flight preview), or `null`.
+  static Rect? screenRect(EditorController c, Viewport view) {
     final world = c.selectionPreview.value?.to ?? c.selectionBounds;
     if (world == null || !c.hasSelection) return null;
-    return c.viewport.worldRectToScreen(world).inflate(6);
+    return view.worldRectToScreen(world).inflate(6);
   }
 
   static Map<SelectionHandle, Offset> handles(Rect r) => {
@@ -300,9 +353,9 @@ class SelectionOverlayPainter extends CustomPainter {
     SelectionHandle.bottomRight: r.bottomRight,
   };
 
-  /// Which handle (or the body) is under [screen]; `null` when outside.
-  static SelectionHandle? hitTestSelection(EditorController c, Offset screen, {required double slop}) {
-    final r = screenRect(c);
+  /// Which handle (or the body) is under [screen] in [view]; `null` when outside.
+  static SelectionHandle? hitTestSelection(EditorController c, Viewport view, Offset screen, {required double slop}) {
+    final r = screenRect(c, view);
     if (r == null) return null;
     for (final e in handles(r).entries) {
       if ((e.value - screen).distance <= slop) return e.key;
@@ -312,7 +365,7 @@ class SelectionOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final r = screenRect(controller);
+    final r = screenRect(controller, viewport);
     if (r == null) return;
     const accent = Color(0xFF3949AB);
     canvas.drawRect(r, Paint()..color = accent.withValues(alpha: 0.05));
@@ -332,7 +385,8 @@ class SelectionOverlayPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant SelectionOverlayPainter old) => old.controller != controller;
+  bool shouldRepaint(covariant SelectionOverlayPainter old) =>
+      old.controller != controller || old.viewport != viewport;
 }
 
 void _drawDashedPath(Canvas canvas, ui.Path path, Color color, double width, double dash) {

@@ -5,13 +5,16 @@ import '../rust/geometry/sticky_note.dart';
 
 /// Floating actions shown above (or below) the selection box.
 class SelectionActionBar extends StatelessWidget {
-  const SelectionActionBar({super.key, required this.controller, required this.onEditNote});
+  const SelectionActionBar({super.key, required this.controller, required this.onEditNote, this.onPin});
 
   final EditorController controller;
   final void Function(StickyNote note) onEditNote;
 
+  /// Pins a picture of the selection over the screen (shown only when set).
+  final VoidCallback? onPin;
+
   static const double height = 48;
-  static const double _approxWidth = 260;
+  static const double _approxWidth = 310;
 
   /// Positions the bar next to [selectionScreenRect], keeping it inside the canvas.
   static Widget positioned({
@@ -19,6 +22,7 @@ class SelectionActionBar extends StatelessWidget {
     required Rect selectionScreenRect,
     required Size canvasSize,
     required void Function(StickyNote note) onEditNote,
+    VoidCallback? onPin,
   }) {
     final above = selectionScreenRect.top - height - 10;
     final top = above >= 4 ? above : (selectionScreenRect.bottom + 10).clamp(4.0, canvasSize.height - height - 4);
@@ -29,7 +33,7 @@ class SelectionActionBar extends StatelessWidget {
     return Positioned(
       left: left,
       top: top.toDouble(),
-      child: SelectionActionBar(controller: controller, onEditNote: onEditNote),
+      child: SelectionActionBar(controller: controller, onEditNote: onEditNote, onPin: onPin),
     );
   }
 
@@ -65,6 +69,12 @@ class SelectionActionBar extends StatelessWidget {
                 icon: const Icon(Icons.content_cut),
                 onPressed: controller.cutSelection,
               ),
+              if (onPin != null)
+                IconButton(
+                  tooltip: 'Pin to screen (stays in view while you scroll)',
+                  icon: const Icon(Icons.push_pin_outlined),
+                  onPressed: onPin,
+                ),
               IconButton(
                 tooltip: 'Delete (Del)',
                 icon: Icon(Icons.delete_outline, color: Theme.of(context).colorScheme.error),

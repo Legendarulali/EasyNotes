@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
@@ -9,11 +10,12 @@ import '../src/services/library_service.dart';
 
 const Color _chrome = Color(0xFF252526);
 const Color _activeTab = Color(0xFF37373C);
+const Color _otherPaneTab = Color(0xFF2E2E32);
 const Color _accent = Color(0xFF8AB4F8);
 
 /// Slim dark top bar of the editor: Home, the tabs of the open notebooks (+ quick open),
-/// then the active notebook's paper style, input options and export. Drawing tools live in
-/// the floating [DraggableToolbar].
+/// the split-screen toggle, then the focused notebook's paper style, input options and
+/// export. Drawing tools live in the floating [DraggableToolbar].
 class EditorAppBar extends StatelessWidget {
   const EditorAppBar({
     super.key,
@@ -39,7 +41,7 @@ class EditorAppBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 640;
-    final controller = tabs.active;
+    final controller = tabs.focused;
     return Material(
       color: _chrome,
       elevation: 2,
@@ -65,9 +67,24 @@ class EditorAppBar extends StatelessWidget {
     );
   }
 
+  static String get splitShortcut => _isApple ? '⌘\\' : 'Ctrl+\\';
+
+  static bool get _isApple =>
+      defaultTargetPlatform == TargetPlatform.macOS || defaultTargetPlatform == TargetPlatform.iOS;
+
+  void _toggleSplit() => tabs.isSplit ? tabs.closeSplit() : tabs.splitRight();
+
   Widget _actions(BuildContext context, EditorController controller, bool compact) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
+      if (!compact)
+        IconButton(
+          tooltip: tabs.isSplit ? 'Close split view ($splitShortcut)' : 'Split view ($splitShortcut)',
+          isSelected: tabs.isSplit,
+          icon: const Icon(Icons.vertical_split_outlined),
+          selectedIcon: const Icon(Icons.vertical_split),
+          onPressed: _toggleSplit,
+        ),
       if (controller.isOpen && controller.isPaged)
         PopupMenuButton<PaperStyle>(
           tooltip: 'Paper',
@@ -134,9 +151,19 @@ class EditorAppBar extends StatelessWidget {
         icon: const Icon(Icons.more_vert),
         onSelected: (v) {
           if (v == 'clear') onClear();
+          if (v == 'split') _toggleSplit();
         },
-        itemBuilder: (_) => const [
-          PopupMenuItem(
+        itemBuilder: (_) => [
+          if (compact)
+            PopupMenuItem(
+              value: 'split',
+              child: ListTile(
+                leading: const Icon(Icons.vertical_split_outlined),
+                title: Text(tabs.isSplit ? 'Close split view' : 'Split view'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          const PopupMenuItem(
             value: 'clear',
             child: ListTile(
               leading: Icon(Icons.delete_sweep_outlined),
@@ -151,10 +178,12 @@ class EditorAppBar extends StatelessWidget {
   );
 }
 
-/// The open notebooks as a horizontal strip of tabs: tap one to switch, × (or a middle
-/// click) to close it, `+` to open another notebook from the library or jump to an open
-/// one. Scrolls sideways (also with the mouse wheel) when the tabs do not fit, and keeps the
-/// active tab in view.
+/// The open notebooks as a horizontal strip of tabs: tap one to show it (in the focused
+/// pane of a split screen), × (or a middle click) to close it, `+` to open another
+/// notebook from the library or jump to an open one. Right-click / long-press a tab for
+/// "Split right"; dragging a tab down onto the right half of the canvas does the same.
+/// Scrolls sideways (also with the mouse wheel) when the tabs do not fit, and keeps the
+/// focused tab in view.
 class NotebookTabBar extends StatefulWidget {
   const NotebookTabBar({
     super.key,
@@ -186,9 +215,9 @@ class _NotebookTabBarState extends State<NotebookTabBar> {
     super.dispose();
   }
 
-  /// Scrolls the newly active tab into view (as little as possible).
+  /// Scrolls the newly focused tab into view (as little as possible).
   void _revealActive() {
-    final active = widget.tabs.active;
+    final active = widget.tabs.focused;
     if (active == null || identical(active, _revealed)) return;
     _revealed = active;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -210,8 +239,9 @@ class _NotebookTabBarState extends State<NotebookTabBar> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.tabs,
     builder: (context, _) {
-      final tabs = widget.tabs.tabs;
-      final active = widget.tabs.active;
+      final open = widget.tabs;
+      final tabs = open.tabs;
+      final focused = open.focused;
       _keys.removeWhere((c, _) => !tabs.contains(c));
       _revealActive();
       return Row(
@@ -228,13 +258,18 @@ class _NotebookTabBarState extends State<NotebookTabBar> {
                     for (final c in tabs)
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 2),
-                        child: NotebookTab(
-                          key: _keys.putIfAbsent(c, () => GlobalKey()),
-                          controller: c,
-                          active: identical(c, active),
-                          maxTitleWidth: widget.compact ? 110 : 190,
-                          onSelect: () => widget.tabs.activate(widget.tabs.tabs.indexOf(c)),
-                          onClose: () => widget.onClose(c),
+                        child: _draggable(
+                          c,
+                          NotebookTab(
+                            key: _keys.putIfAbsent(c, () => GlobalKey()),
+                            controller: c,
+                            active: identical(c, focused),
+                            shownInOtherPane: !identical(c, focused) && open.isShown(c),
+                            maxTitleWidth: widget.compact ? 110 : 190,
+                            onSelect: () => open.activate(open.tabs.indexOf(c)),
+                            onClose: () => widget.onClose(c),
+                            onContextMenu: () => _showTabMenu(c),
+                          ),
                         ),
                       ),
                   ],
@@ -247,6 +282,118 @@ class _NotebookTabBarState extends State<NotebookTabBar> {
       );
     },
   );
+
+  /// A tab pulled *down* out of the strip can be dropped on a pane (sideways drags still
+  /// scroll the strip).
+  Widget _draggable(EditorController c, Widget tab) => Draggable<EditorController>(
+    data: c,
+    affinity: Axis.vertical,
+    dragAnchorStrategy: pointerDragAnchorStrategy,
+    feedback: _TabDragFeedback(controller: c),
+    childWhenDragging: Opacity(opacity: 0.45, child: tab),
+    child: tab,
+  );
+
+  Future<void> _showTabMenu(EditorController c) async {
+    final tabContext = _keys[c]?.currentContext;
+    if (tabContext == null) return;
+    final open = widget.tabs;
+    final box = tabContext.findRenderObject()! as RenderBox;
+    final overlay = Navigator.of(context).overlay!.context.findRenderObject()! as RenderBox;
+    final below = Offset(0, box.size.height);
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        box.localToGlobal(below, ancestor: overlay),
+        box.localToGlobal(box.size.bottomRight(Offset.zero) + below, ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final inRight = identical(c, open.split);
+    final choice = await showMenu<_TabAction>(
+      context: context,
+      position: position,
+      items: [
+        PopupMenuItem(
+          value: _TabAction.splitRight,
+          enabled: !inRight,
+          child: const ListTile(
+            leading: Icon(Icons.vertical_split_outlined),
+            title: Text('Split right'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        if (open.isSplit && !identical(c, open.active))
+          const PopupMenuItem(
+            value: _TabAction.openLeft,
+            child: ListTile(
+              leading: Icon(Icons.tab),
+              title: Text('Open in the left pane'),
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+            ),
+          ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: _TabAction.close,
+          child: ListTile(
+            leading: Icon(Icons.close),
+            title: Text('Close tab'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+      ],
+    );
+    if (!mounted || !open.tabs.contains(c)) return;
+    switch (choice) {
+      case _TabAction.splitRight:
+        open.splitRight(c);
+      case _TabAction.openLeft:
+        open
+          ..focusPane(EditorPane.primary)
+          ..activate(open.tabs.indexOf(c));
+      case _TabAction.close:
+        widget.onClose(c);
+      case null:
+        break;
+    }
+  }
+}
+
+enum _TabAction { splitRight, openLeft, close }
+
+/// What follows the pointer while a tab is dragged onto a pane.
+class _TabDragFeedback extends StatelessWidget {
+  const _TabDragFeedback({required this.controller});
+
+  final EditorController controller;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: _activeTab,
+    elevation: 8,
+    borderRadius: BorderRadius.circular(8),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(controller.entry.meta.kind.icon, size: 16, color: _accent),
+          const SizedBox(width: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 200),
+            child: Text(
+              controller.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 13.5),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 /// One tab: notebook kind (a spinner while it loads), title and a close button.
@@ -257,13 +404,23 @@ class NotebookTab extends StatelessWidget {
     required this.active,
     required this.onSelect,
     required this.onClose,
+    this.shownInOtherPane = false,
+    this.onContextMenu,
     this.maxTitleWidth = 190,
   });
 
   final EditorController controller;
+
+  /// Shown in the focused pane.
   final bool active;
+
+  /// Shown in the other pane of the split screen (dimmer underline).
+  final bool shownInOtherPane;
   final VoidCallback onSelect;
   final VoidCallback onClose;
+
+  /// Right click or long press.
+  final VoidCallback? onContextMenu;
   final double maxTitleWidth;
 
   @override
@@ -284,16 +441,31 @@ class NotebookTab extends StatelessWidget {
         child: Semantics(
           selected: active,
           child: Material(
-            color: active ? _activeTab : Colors.transparent,
+            color: active
+                ? _activeTab
+                : shownInOtherPane
+                ? _otherPaneTab
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
             clipBehavior: Clip.antiAlias,
             child: InkWell(
               onTap: onSelect,
+              onSecondaryTap: onContextMenu,
+              onLongPress: onContextMenu,
               child: Container(
                 height: 36,
                 padding: const EdgeInsets.only(left: 10, right: 2),
                 decoration: BoxDecoration(
-                  border: Border(bottom: BorderSide(color: active ? _accent : Colors.transparent, width: 2)),
+                  border: Border(
+                    bottom: BorderSide(
+                      color: active
+                          ? _accent
+                          : shownInOtherPane
+                          ? _accent.withValues(alpha: 0.35)
+                          : Colors.transparent,
+                      width: 2,
+                    ),
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,

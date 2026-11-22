@@ -26,6 +26,8 @@ import 'package:flutter_app/src/sync/google_auth.dart';
 import 'package:flutter_app/src/sync/sync_service.dart';
 import 'package:flutter_app/widgets/canvas_status_bar.dart';
 import 'package:flutter_app/widgets/editor_app_bar.dart';
+import 'package:flutter_app/widgets/pinned_overlay.dart';
+import 'package:flutter_app/widgets/split_view.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
@@ -652,6 +654,218 @@ void main() {
     sync.dispose();
     await dir.delete(recursive: true);
   });
+
+  testWidgets('split screen: one notebook twice with separate views, then two notebooks side by side', (
+    tester,
+  ) async {
+    final dir = await Directory.systemTemp.createTemp('easynotes_split');
+    final lib = LibraryService(dir);
+    final sync = SyncService(library: lib, auth: GoogleAuth.forPlatform());
+    final alpha = await lib.createNotebook(dir, 'Alpha', NotebookTemplate.ruled);
+    final beta = await lib.createNotebook(dir, 'Beta', NotebookTemplate.grid);
+    final tabs = OpenNotebooks(library: lib, sync: sync);
+    final a = tabs.open(alpha);
+    await tester.pumpWidget(MaterialApp(theme: buildEasyNotesTheme(), home: EditorScreen(tabs: tabs)));
+    await tester.pumpAndSettle();
+    _drawWith(a, const [Offset(100, 200), Offset(300, 260), Offset(400, 210)]);
+    await tester.pump();
+    expect(find.byType(PaneHeader), findsNothing);
+
+    // Ctrl+\ splits: the same notebook on both sides, the new right pane focused.
+    await _keys(tester, [LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.backslash);
+    expect((tabs.isSplit, tabs.active, tabs.split, tabs.focusedPane), (true, a, a, EditorPane.secondary));
+    expect(find.byType(NoteCanvas), findsNWidgets(2));
+    expect(find.byType(CanvasStatusBar), findsNWidgets(2));
+    expect(find.byType(PaneHeader), findsNWidgets(2));
+    expect(find.byTooltip('Close split view'), findsOneWidget, reason: 'only the right pane closes');
+    Rect pane(int i) => tester.getRect(find.byType(NoteCanvas).at(i));
+    expect((pane(0).width - pane(1).width).abs(), lessThan(2), reason: '50 / 50');
+    expect(pane(1).left, greaterThan(pane(0).right));
+    final left = a.viewport;
+    final right = a.viewOf(EditorPane.secondary);
+    expect(right, isNot(same(left)));
+    expect(right.scale, closeTo(left.scale, 1e-6), reason: 'both fitted to the same pane width');
+
+    // The wheel scrolls only the pane under the pointer.
+    final leftTop = left.offset.dy;
+    await _wheel(tester, pane(1).center, 300);
+    expect(right.offset.dy, greaterThan(leftTop + 100));
+    expect(left.offset.dy, leftTop);
+
+    // Writing in the right pane writes into the one document (both panes show it);
+    // Ctrl+Z undoes it there.
+    await _penStroke(tester, pane(1).center, const Offset(120, 30));
+    expect(a.scene.strokeCount, 2);
+    await _keys(tester, [LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyZ);
+    expect(a.scene.strokeCount, 1);
+
+    // Scrolling to the end in one pane appends a page; the other pane can scroll to it.
+    for (var i = 0; i < 30 && a.pages.length < 2; i++) {
+      await _wheel(tester, pane(1).center, 400);
+    }
+    expect(a.pages.length, greaterThanOrEqualTo(2));
+    expect(left.contentHeight, right.contentHeight);
+
+    // Opening Beta fills the focused (right) pane: two notebooks side by side.
+    final b = tabs.open(beta);
+    await _until(tester, () => b.isOpen);
+    await tester.pumpAndSettle();
+    expect((tabs.active, tabs.split, tabs.focused), (a, b, b));
+    expect(find.widgetWithText(PaneHeader, 'Beta'), findsOneWidget);
+    await _penStroke(tester, pane(1).center, const Offset(-140, 40));
+    expect((a.scene.strokeCount, b.scene.strokeCount), (1, 1));
+
+    // Touching the left pane's header focuses it: the shortcuts follow.
+    await tester.tap(find.widgetWithText(PaneHeader, 'Alpha'));
+    await tester.pumpAndSettle();
+    expect(tabs.focused, same(a));
+    await _keys(tester, [LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyZ);
+    expect((a.scene.strokeCount, b.scene.strokeCount), (0, 1), reason: 'undo stayed in the left notebook');
+    await _keys(tester, [LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.keyY);
+    expect((a.scene.strokeCount, b.scene.strokeCount), (1, 1));
+    expect(b.canUndo, isTrue);
+
+    // Each notebook was written to its own file.
+    await a.save();
+    await b.save();
+    for (final (slot, entry) in [(900, alpha), (901, beta)]) {
+      await loadDocument(slot: slot, path: entry.documentFile.path);
+      activateDocument(slot: slot);
+      expect(getScene().strokes, hasLength(1), reason: '${entry.name} saved its own stroke');
+      closeDocument(slot: slot);
+    }
+
+    // × closes the right pane; Beta stays open as a tab.
+    await tester.tap(find.byTooltip('Close split view'));
+    await tester.pumpAndSettle();
+    expect((tabs.isSplit, tabs.active, tabs.length), (false, a, 2));
+    expect(find.byType(NoteCanvas), findsOneWidget);
+
+    // A tab's context menu: "Split right" puts it next to the current notebook.
+    await tester.tap(find.widgetWithText(NotebookTab, 'Beta'), buttons: kSecondaryButton, kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Split right'));
+    await tester.pumpAndSettle();
+    expect((tabs.active, tabs.split), (a, b));
+    expect(find.byType(NoteCanvas), findsNWidgets(2));
+    await _keys(tester, [LogicalKeyboardKey.controlLeft], LogicalKeyboardKey.backslash);
+    expect(tabs.isSplit, isFalse);
+
+    await tester.pumpWidget(const SizedBox());
+    tabs.dispose();
+    expect(openDocuments(), isEmpty);
+    sync.dispose();
+    await dir.delete(recursive: true);
+  });
+
+  testWidgets('pin to screen: the selection floats over the canvas and is never part of the notebook', (
+    tester,
+  ) async {
+    final dir = await Directory.systemTemp.createTemp('easynotes_pin');
+    final lib = LibraryService(dir);
+    final sync = SyncService(library: lib, auth: GoogleAuth.forPlatform());
+    final alpha = await lib.createNotebook(dir, 'Alpha', NotebookTemplate.ruled);
+    final beta = await lib.createNotebook(dir, 'Beta', NotebookTemplate.ruled);
+    final tabs = OpenNotebooks(library: lib, sync: sync);
+    final a = tabs.open(alpha);
+    await tester.pumpWidget(MaterialApp(theme: buildEasyNotesTheme(), home: EditorScreen(tabs: tabs)));
+    await tester.pumpAndSettle();
+    _drawWith(a, const [Offset(100, 200), Offset(300, 260), Offset(400, 210)]);
+    var saves = 0;
+    final markPending = a.onSaved;
+    a.onSaved = () {
+      saves++;
+      markPending?.call();
+    };
+    await a.save();
+    expect(saves, 1);
+    final before = await a.exportPdf('${dir.path}${Platform.pathSeparator}before.pdf');
+
+    a.selectBox(const Rect.fromLTRB(50, 150, 450, 300));
+    await tester.pumpAndSettle();
+    const pinTooltip = 'Pin to screen (stays in view while you scroll)';
+    expect(find.byTooltip(pinTooltip), findsOneWidget, reason: 'next to Copy, Cut, Duplicate and Delete');
+    await tester.tap(find.byTooltip(pinTooltip));
+    await _until(tester, () => tabs.pins.length == 1);
+    await tester.pumpAndSettle();
+    expect(find.byType(PinnedOverlayBox), findsOneWidget);
+    expect(find.text('Alpha · page 1'), findsOneWidget);
+    expect(a.hasSelection, isFalse);
+    final box = tabs.pins.boxes.single;
+    final card = tester.getRect(find.byType(PinnedOverlayBox));
+    expect(box.image.width, greaterThan(card.width * 2), reason: 'rendered at high resolution');
+
+    // The notebook did not change: nothing to save, and the PDF export is identical.
+    await a.save();
+    expect(saves, 1);
+    final after = await a.exportPdf('${dir.path}${Platform.pathSeparator}after.pdf');
+    expect(after.pageCount, before.pageCount);
+    expect(await File(after.path).readAsBytes(), await File(before.path).readAsBytes());
+    expect(a.scene.strokeCount, 1);
+
+    // It stays put on screen while the page scrolls and when another tab is shown.
+    final canvas = tester.getRect(find.byType(NoteCanvas));
+    final top = a.viewport.offset.dy;
+    await _wheel(tester, canvas.center + const Offset(-200, 100), 250);
+    expect(a.viewport.offset.dy, greaterThan(top));
+    expect(tester.getRect(find.byType(PinnedOverlayBox)), card);
+    final b = tabs.open(beta);
+    await _until(tester, () => b.isOpen);
+    await tester.pumpAndSettle();
+    expect(tabs.active, same(b));
+    expect(tester.getRect(find.byType(PinnedOverlayBox)), card);
+    tabs.activate(0);
+    await tester.pumpAndSettle();
+
+    // A second pin cascades below the first; 75 % opacity; × unpins.
+    a.selectBox(const Rect.fromLTRB(50, 150, 450, 300));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip(pinTooltip));
+    await _until(tester, () => tabs.pins.length == 2);
+    await tester.pumpAndSettle();
+    expect(find.byType(PinnedOverlayBox), findsNWidgets(2));
+    await tester.tap(find.byTooltip('Make see-through (75 %)').last);
+    await tester.pump();
+    expect(tabs.pins.boxes.last.seeThrough, isTrue);
+    await tester.tap(find.byTooltip('Unpin').first);
+    await tester.pumpAndSettle();
+    expect(tabs.pins.length, 1);
+
+    await tester.pumpWidget(const SizedBox());
+    tabs.dispose();
+    sync.dispose();
+    await dir.delete(recursive: true);
+  });
+}
+
+/// Presses [key] with [modifiers] held.
+Future<void> _keys(WidgetTester tester, List<LogicalKeyboardKey> modifiers, LogicalKeyboardKey key) async {
+  for (final m in modifiers) {
+    await tester.sendKeyDownEvent(m);
+  }
+  await tester.sendKeyEvent(key);
+  for (final m in modifiers.reversed) {
+    await tester.sendKeyUpEvent(m);
+  }
+  await tester.pumpAndSettle();
+}
+
+/// One mouse-wheel notch of [dy] pixels at [at].
+Future<void> _wheel(WidgetTester tester, Offset at, double dy) async {
+  final mouse = TestPointer(77, PointerDeviceKind.mouse)..hover(at);
+  await tester.sendEventToBinding(mouse.scroll(Offset(0, dy)));
+  await tester.pump();
+}
+
+/// A stylus stroke from [from] by [by], as on a tablet.
+Future<void> _penStroke(WidgetTester tester, Offset from, Offset by) async {
+  final pen = await tester.startGesture(from, kind: PointerDeviceKind.stylus);
+  for (var i = 1; i <= 12; i++) {
+    await pen.moveTo(from + by * (i / 12) + Offset(0, math.sin(i.toDouble()) * 6));
+    await tester.pump();
+  }
+  await pen.up();
+  await tester.pumpAndSettle();
 }
 
 /// Draws a pen stroke through [path] with the controller (as the canvas does).

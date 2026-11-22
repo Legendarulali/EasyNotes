@@ -173,13 +173,40 @@ class Viewport extends ChangeNotifier {
 
   /// Initial view of a freshly opened document: top of the first page, and the whole
   /// page width on screen when the free area is narrower than the page (never zooms in
-  /// beyond 100 %).
-  void fitPageWidth({double margin = 16}) {
+  /// beyond 100 %). With [top], that world Y stays at the top of the free area instead
+  /// (the split screen opening or closing keeps each pane on its page).
+  void fitPageWidth({double margin = 16, double? top}) {
     final w = _contentWidth;
     if (w == null || _size.width <= 0) return;
     final free = _size.width - _insets.horizontal;
     _scale = math.min(1.0, (free - 2 * margin) / w).clamp(minScale, maxScale);
-    _scroll = Offset(minScrollX, minScrollY);
+    _scroll = Offset(minScrollX, top == null ? minScrollY : top - _insets.top / _scale);
+    _clamp();
+    notifyListeners();
+  }
+
+  ({double? top})? _pendingFit;
+
+  /// Asks for [fitPageWidth] as soon as the canvas has its (new) size: after opening a
+  /// notebook, and when the split screen makes the pane narrower or wider.
+  void fitWhenLaidOut({double? top}) => _pendingFit = (top: top);
+
+  /// The fit asked for by [fitWhenLaidOut], handed out once (the canvas runs it after
+  /// layout).
+  ({double? top})? takePendingFit() {
+    final fit = _pendingFit;
+    _pendingFit = null;
+    return fit;
+  }
+
+  /// Takes over [other]'s zoom and position (a second view of a notebook starts where
+  /// the first one is). This view keeps its own size and insets.
+  void showSameAs(Viewport other) {
+    final anchor = other.offset;
+    _scale = other._scale;
+    _contentWidth = other._contentWidth;
+    _contentHeight = other._contentHeight;
+    _scroll = anchor - Offset(_insets.left, _insets.top) / _scale;
     _clamp();
     notifyListeners();
   }
