@@ -25,6 +25,7 @@ import 'package:flutter_app/src/services/library_service.dart';
 import 'package:flutter_app/src/sync/google_auth.dart';
 import 'package:flutter_app/src/sync/sync_service.dart';
 import 'package:flutter_app/widgets/canvas_status_bar.dart';
+import 'package:flutter_app/widgets/draggable_toolbar.dart';
 import 'package:flutter_app/widgets/editor_app_bar.dart';
 import 'package:flutter_app/widgets/pinned_overlay.dart';
 import 'package:flutter_app/widgets/split_view.dart';
@@ -830,6 +831,51 @@ void main() {
     await tester.tap(find.byTooltip('Unpin').first);
     await tester.pumpAndSettle();
     expect(tabs.pins.length, 1);
+
+    await tester.pumpWidget(const SizedBox());
+    tabs.dispose();
+    sync.dispose();
+    await dir.delete(recursive: true);
+  });
+
+  testWidgets('the toolbar appears when a tab opened in the visible editor finishes loading', (tester) async {
+    final dir = await Directory.systemTemp.createTemp('easynotes_toolbar');
+    final lib = LibraryService(dir);
+    final sync = SyncService(library: lib, auth: GoogleAuth.forPlatform());
+    final first = await lib.createNotebook(dir, 'First', NotebookTemplate.grid);
+    final late = await lib.createNotebook(dir, 'Late', NotebookTemplate.ruled);
+    final tabs = OpenNotebooks(library: lib, sync: sync);
+    final a = tabs.open(first);
+    await tester.pumpWidget(MaterialApp(theme: buildEasyNotesTheme(), home: EditorScreen(tabs: tabs)));
+    await _until(tester, () => a.isOpen);
+    await tester.pumpAndSettle();
+    const grip = 'Drag to move the toolbar';
+    expect(find.byTooltip(grip), findsOneWidget);
+
+    // Give the second notebook enough ink that loading it takes a moment.
+    final filler = tabs.open(late);
+    await _until(tester, () => filler.isOpen);
+    for (var i = 0; i < 300; i++) {
+      _drawWith(filler, [Offset(60, 40.0 + i * 3), Offset(500, 44.0 + i * 3), Offset(940, 40.0 + i * 3)]);
+    }
+    await tabs.close(filler);
+    await tester.pumpAndSettle();
+
+    // The editor rebuilds for the new tab right away and the notebook finishes loading
+    // later: then only the notebook notifies, and the toolbar must still appear.
+    var checked = false;
+    for (var attempt = 0; attempt < 5 && !checked; attempt++) {
+      final b = tabs.open(late);
+      await tester.pump();
+      checked = !b.isOpen;
+      await _until(tester, () => b.isOpen);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip(grip), findsOneWidget);
+      expect(tester.widget<DraggableToolbar>(find.byType(DraggableToolbar)).controller, same(b));
+      await tabs.close(b);
+      await tester.pumpAndSettle();
+    }
+    expect(checked, isTrue, reason: 'the notebook always loaded before the editor rebuilt');
 
     await tester.pumpWidget(const SizedBox());
     tabs.dispose();

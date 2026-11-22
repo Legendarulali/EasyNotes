@@ -408,13 +408,20 @@ class _EditorScreenState extends State<EditorScreen> {
                     ),
                   ),
                   Positioned.fill(child: PinnedBoxesLayer(board: tabs.pins, bounds: area)),
-                  if (focused != null && focused.isOpen)
-                    DraggableToolbar(
-                      controller: focused,
-                      bounds: area,
-                      placement: _placement,
-                      onPlacementChanged: _onPlacementChanged,
-                      onObstructionChanged: _onToolbarObstruction,
+                  // Shown once the notebook has loaded, which usually happens after this
+                  // screen is built (only the controller notifies then, not the tabs).
+                  if (focused != null)
+                    ListenableBuilder(
+                      listenable: focused,
+                      builder: (context, _) => focused.isOpen
+                          ? DraggableToolbar(
+                              controller: focused,
+                              bounds: area,
+                              placement: _placement,
+                              onPlacementChanged: _onPlacementChanged,
+                              onObstructionChanged: _onToolbarObstruction,
+                            )
+                          : const SizedBox.shrink(),
                     ),
                 ],
               ),
