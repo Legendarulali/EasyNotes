@@ -1,0 +1,1125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>EasyNotes · Handwritten notes with a Rust engine</title>
+  <meta name="description" content="EasyNotes is a free, open-source handwriting notebook for Windows and Linux 2-in-1s, Android tablets and iPad: ruled and grid notebooks, whiteboards, PDF annotation, instant shape snap, split screen, pin-to-screen reference cards and optional Google Drive backup.">
+  <meta name="theme-color" content="#1e1e1e">
+  <link rel="icon" type="image/png" href="./logo.png">
+  <link rel="apple-touch-icon" href="./logo.png">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="EasyNotes · Handwritten notes with a Rust engine">
+  <meta property="og:description" content="Notebooks, whiteboards and PDFs you write on. Shape snap, split screen, pinned reference cards. Local-first, open source.">
+  <meta property="og:image" content="https://legendarulali.github.io/EasyNotes/assets/screen_editor.png">
+  <meta property="og:url" content="https://legendarulali.github.io/EasyNotes/">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="./assets/site.css">
+  <script>
+    // Scroll-driven tour only with JavaScript and without a reduced-motion preference.
+    document.documentElement.classList.add('js');
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) document.documentElement.classList.add('motion');
+  </script>
+  <style>
+    /* ---------------------------------------------------------------- hero */
+    .hero {
+      position: relative;
+      padding: clamp(64px, 12vh, 132px) 0 clamp(48px, 9vh, 96px);
+      text-align: center;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: -20% -10% auto;
+      height: 120%;
+      background:
+        radial-gradient(40% 40% at 50% 30%, rgba(138, 180, 248, 0.16), transparent 70%),
+        radial-gradient(30% 30% at 75% 10%, rgba(59, 120, 240, 0.12), transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero .wrap {
+      position: relative;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 13px;
+      letter-spacing: 0.02em;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .eyebrow b {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .hero h1 {
+      margin: 22px auto 0;
+      max-width: 15ch;
+      font-size: clamp(2.6rem, 7.4vw, 5.6rem);
+      line-height: 1.02;
+      letter-spacing: -0.045em;
+      font-weight: 750;
+    }
+
+    .scribble {
+      position: relative;
+      white-space: nowrap;
+      color: #fff;
+    }
+
+    .scribble svg {
+      position: absolute;
+      left: -2%;
+      bottom: -0.27em;
+      width: 104%;
+      height: 0.42em;
+      overflow: visible;
+    }
+
+    .scribble path {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 7;
+      stroke-linecap: round;
+      stroke-dasharray: 1;
+      stroke-dashoffset: 1;
+      animation: draw 1.1s 0.35s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+    }
+
+    @keyframes draw {
+      to {
+        stroke-dashoffset: 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .scribble path {
+        animation: none;
+        stroke-dashoffset: 0;
+      }
+    }
+
+    .hero .lede {
+      margin: 38px auto 0;
+      max-width: 640px;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 2.2vw, 1.3rem);
+      line-height: 1.5;
+    }
+
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .platforms {
+      margin-top: 20px;
+      color: var(--faint);
+      font-size: 14px;
+    }
+
+    .scroll-cue {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      margin-top: clamp(36px, 7vh, 64px);
+      color: var(--faint);
+      font-size: 13px;
+    }
+
+    .scroll-cue span {
+      width: 22px;
+      height: 34px;
+      border: 1.5px solid var(--faint);
+      border-radius: 12px;
+      position: relative;
+    }
+
+    .scroll-cue span::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 7px;
+      width: 3px;
+      height: 7px;
+      margin-left: -1.5px;
+      border-radius: 2px;
+      background: var(--muted);
+      animation: cue 1.8s ease-in-out infinite;
+    }
+
+    @keyframes cue {
+      0% { transform: translateY(0); opacity: 1; }
+      70% { transform: translateY(10px); opacity: 0; }
+      100% { opacity: 0; }
+    }
+
+    /* ---------------------------------------------------------------- tour */
+    .tour-track {
+      position: relative;
+      height: 520vh;
+    }
+
+    .stage {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      height: 100svh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 72px var(--gutter) 22px;
+      overflow: hidden;
+    }
+
+    .copy-stack {
+      position: relative;
+      width: min(820px, 100%);
+      height: 176px;
+      flex: none;
+    }
+
+    .copy {
+      position: absolute;
+      inset: 0;
+      text-align: center;
+      opacity: 0;
+      transform: translateY(14px);
+      transition: opacity 0.45s ease, transform 0.45s ease, visibility 0s 0.45s;
+      visibility: hidden;
+    }
+
+    .copy.on {
+      opacity: 1;
+      transform: none;
+      visibility: visible;
+      transition: opacity 0.45s ease, transform 0.45s ease, visibility 0s;
+    }
+
+    .copy .kicker {
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .copy h2 {
+      margin: 6px 0 8px;
+      font-size: clamp(1.6rem, 3.6vw, 2.6rem);
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+    }
+
+    .copy p {
+      margin: 0 auto;
+      max-width: 700px;
+      color: var(--muted);
+      font-size: clamp(0.95rem, 1.5vw, 1.05rem);
+      line-height: 1.5;
+    }
+
+    .copy .cta-row {
+      margin-top: 14px;
+    }
+
+    .frame {
+      --w: min(1180px, 100%, calc((100svh - 326px) * 1.6));
+      width: var(--w);
+      margin-top: 18px;
+      border-radius: 14px;
+      background: #111113;
+      border: 1px solid var(--line-strong);
+      box-shadow: 0 40px 120px -30px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(0, 0, 0, 0.6);
+      overflow: hidden;
+      flex: none;
+    }
+
+    .titlebar {
+      height: 32px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 0 0 12px;
+      background: #19191b;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .titlebar img {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+    }
+
+    .winbtns {
+      display: flex;
+      margin-left: auto;
+      height: 100%;
+    }
+
+    .winbtns i {
+      width: 44px;
+      display: grid;
+      place-items: center;
+      color: var(--faint);
+      font-style: normal;
+    }
+
+    .winbtns svg {
+      width: 10px;
+      height: 10px;
+    }
+
+    .viewport {
+      position: relative;
+      aspect-ratio: 16 / 10;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    .camera {
+      position: absolute;
+      inset: 0;
+      transform-origin: 0 0;
+    }
+
+    .camera img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    .camera img:first-child {
+      opacity: 1;
+    }
+
+    .marks {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .marks .ring {
+      fill: rgba(138, 180, 248, 0.08);
+      stroke: var(--accent);
+      stroke-width: 1.5;
+    }
+
+    .marks .ring.feature {
+      stroke: #ffd36b;
+      fill: rgba(255, 211, 107, 0.1);
+    }
+
+    .marks .dim {
+      fill: #0b0b0d;
+    }
+
+    .marks .arrow,
+    .marks .arrow-halo {
+      fill: none;
+      stroke: #fff;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-dasharray: 1;
+    }
+
+    .marks .arrow-halo {
+      stroke: rgba(0, 0, 0, 0.55);
+      stroke-width: 4.5;
+    }
+
+    .marks .arrow.feature {
+      stroke: #ffd36b;
+    }
+
+    .marks .num circle {
+      fill: var(--accent);
+      stroke: #0b1a33;
+      stroke-width: 1.5;
+    }
+
+    .marks .num.feature circle {
+      fill: #ffd36b;
+    }
+
+    .marks .num text {
+      fill: #0b1a33;
+      font: 700 11px/1 var(--font);
+      text-anchor: middle;
+      dominant-baseline: central;
+    }
+
+    .labels {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .label {
+      position: absolute;
+      left: 0;
+      top: 0;
+      max-width: 230px;
+      transform-origin: 0 0;
+      padding: 9px 13px 10px;
+      border-radius: 12px;
+      background: rgba(28, 28, 30, 0.62);
+      backdrop-filter: blur(16px) saturate(1.5);
+      -webkit-backdrop-filter: blur(16px) saturate(1.5);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+      opacity: 0;
+      will-change: transform, opacity;
+    }
+
+    .label b {
+      display: block;
+      font-size: 13.5px;
+      font-weight: 650;
+      letter-spacing: -0.005em;
+      color: #fff;
+    }
+
+    .label span {
+      display: block;
+      margin-top: 2px;
+      font-size: 12px;
+      line-height: 1.35;
+      color: #c9c9ce;
+    }
+
+    .label.feature {
+      border-color: rgba(255, 211, 107, 0.55);
+      box-shadow: 0 0 0 4px rgba(255, 211, 107, 0.1), 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+    }
+
+    .label.feature b::before {
+      content: "★ ";
+      color: #ffd36b;
+    }
+
+    .legend {
+      display: none;
+    }
+
+    .stage-nav {
+      position: absolute;
+      left: var(--gutter);
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      z-index: 2;
+    }
+
+    .stage-nav button {
+      all: unset;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--faint);
+      font-size: 12px;
+      padding: 4px 0;
+    }
+
+    .stage-nav button::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      transition: transform 0.2s ease;
+    }
+
+    .stage-nav button[aria-current="step"] {
+      color: var(--text);
+    }
+
+    .stage-nav button[aria-current="step"]::before {
+      background: var(--accent);
+      transform: scale(1.5);
+    }
+
+    .stage-nav button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    @media (max-width: 1500px) {
+      .stage-nav span {
+        display: none;
+      }
+    }
+
+    @media (max-width: 900px) {
+      .stage-nav {
+        display: none;
+      }
+    }
+
+    /* Phones and narrow windows: numbered markers on the screenshot, text below it. */
+    @media (max-width: 820px) {
+      .stage {
+        padding-top: 64px;
+      }
+
+      .copy-stack {
+        height: 178px;
+      }
+
+      .copy p {
+        font-size: 0.92rem;
+      }
+
+      /* The header's Download button stays in reach; the stage keeps the room for the screen. */
+      .copy .cta-row {
+        display: none;
+      }
+
+      .frame {
+        --w: 100%;
+        margin-top: 10px;
+        border-radius: 10px;
+      }
+
+      .titlebar {
+        height: 24px;
+        font-size: 11px;
+      }
+
+      .winbtns i {
+        width: 30px;
+      }
+
+      .labels {
+        display: none;
+      }
+
+      .legend {
+        display: block;
+        list-style: none;
+        margin: 14px 0 0;
+        padding: 0;
+        width: 100%;
+        font-size: 13.5px;
+        line-height: 1.35;
+      }
+
+      .legend li {
+        display: flex;
+        gap: 10px;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--line);
+        animation: rise 0.35s ease both;
+      }
+
+      .legend .n {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #0b1a33;
+        font-weight: 700;
+        font-size: 11px;
+        display: grid;
+        place-items: center;
+      }
+
+      .legend .feature .n {
+        background: #ffd36b;
+      }
+
+      .legend b {
+        font-weight: 650;
+      }
+
+      .legend span {
+        color: var(--muted);
+      }
+    }
+
+    @media (max-width: 820px) and (max-height: 700px) {
+      .copy p {
+        display: none;
+      }
+
+      .copy-stack {
+        height: 96px;
+      }
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(6px); }
+    }
+
+    /* Without JavaScript or with reduced motion: a plain sequence of screens. */
+    .tour-static {
+      display: grid;
+      gap: clamp(56px, 9vw, 110px);
+      padding: 24px 0 40px;
+    }
+
+    .motion .tour-static {
+      display: none;
+    }
+
+    html:not(.motion) .tour-track {
+      display: none;
+    }
+
+    .tour-static figure {
+      margin: 0;
+    }
+
+    .tour-static img {
+      border-radius: 12px;
+      border: 1px solid var(--line-strong);
+      box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.8);
+    }
+
+    .tour-static figcaption {
+      max-width: 760px;
+      margin: 0 auto 22px;
+      text-align: center;
+    }
+
+    .tour-static h2 {
+      font-size: clamp(1.6rem, 3.6vw, 2.5rem);
+      letter-spacing: -0.035em;
+      line-height: 1.1;
+      margin: 6px 0 10px;
+    }
+
+    .tour-static p {
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .tour-static ul {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+      list-style: none;
+      padding: 0;
+      margin: 16px 0 0;
+    }
+
+    .tour-static li {
+      padding: 5px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      font-size: 13.5px;
+      color: #d6d6da;
+    }
+
+    .kicker {
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    /* ---------------------------------------------------------------- numbers */
+    .numbers {
+      padding: clamp(56px, 10vw, 110px) 0 20px;
+    }
+
+    .numbers .wrap {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .numbers div {
+      background: var(--bg);
+      padding: 26px 22px;
+    }
+
+    .numbers strong {
+      display: block;
+      font-size: clamp(1.9rem, 4vw, 2.8rem);
+      letter-spacing: -0.04em;
+      line-height: 1;
+      background: linear-gradient(180deg, #fff, #b9cff7);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .numbers span {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 760px) {
+      .numbers .wrap {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    /* ---------------------------------------------------------------- features */
+    .section-head {
+      max-width: 760px;
+      margin: 0 auto 40px;
+      text-align: center;
+    }
+
+    .section-head h2 {
+      font-size: clamp(2rem, 4.6vw, 3.3rem);
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+      margin: 8px 0 12px;
+    }
+
+    .section-head p {
+      color: var(--muted);
+      margin: 0;
+      font-size: 1.08rem;
+    }
+
+    .features {
+      padding: clamp(72px, 12vw, 140px) 0 40px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      position: relative;
+      padding: 24px 24px 22px;
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, #262628, #212123);
+      border: 1px solid var(--line);
+      transition: border-color 0.2s ease, transform 0.2s ease;
+    }
+
+    .card:hover {
+      border-color: var(--line-strong);
+      transform: translateY(-2px);
+    }
+
+    .card.highlight {
+      border-color: rgba(255, 211, 107, 0.35);
+      background: linear-gradient(180deg, rgba(255, 211, 107, 0.07), #212123 60%);
+    }
+
+    .card .icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 11px;
+      display: grid;
+      place-items: center;
+      background: rgba(138, 180, 248, 0.12);
+      color: var(--accent);
+      margin-bottom: 16px;
+    }
+
+    .card.highlight .icon {
+      background: rgba(255, 211, 107, 0.14);
+      color: #ffd36b;
+    }
+
+    .card .icon svg {
+      width: 22px;
+      height: 22px;
+    }
+
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 1.12rem;
+      letter-spacing: -0.015em;
+      line-height: 1.25;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .card ul {
+      margin: 12px 0 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .card li {
+      font-size: 12px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--line);
+      color: #cfcfd4;
+    }
+
+    kbd {
+      font-family: var(--mono);
+      font-size: 0.85em;
+      padding: 1px 6px;
+      border-radius: 6px;
+      border: 1px solid var(--line-strong);
+      background: var(--panel-2);
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    /* ---------------------------------------------------------------- download */
+    .download {
+      padding: clamp(80px, 12vw, 150px) 0;
+    }
+
+    .download .panel {
+      position: relative;
+      overflow: hidden;
+      text-align: center;
+      padding: clamp(40px, 7vw, 72px) var(--gutter);
+      border-radius: 28px;
+      border: 1px solid var(--line-strong);
+      background:
+        radial-gradient(60% 80% at 50% 0%, rgba(138, 180, 248, 0.18), transparent 70%),
+        linear-gradient(180deg, #232326, #1b1b1d);
+    }
+
+    .download img.logo {
+      width: 88px;
+      height: 88px;
+      margin: 0 auto 22px;
+      border-radius: 22px;
+      box-shadow: 0 20px 50px -15px rgba(59, 120, 240, 0.55);
+    }
+
+    .download h2 {
+      font-size: clamp(2rem, 5vw, 3.4rem);
+      letter-spacing: -0.04em;
+      line-height: 1.05;
+      margin: 0 0 12px;
+    }
+
+    .download p {
+      color: var(--muted);
+      max-width: 620px;
+      margin: 0 auto;
+    }
+
+    .download .small {
+      margin-top: 20px;
+      font-size: 14px;
+      color: var(--faint);
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#features">Skip to the feature list</a>
+
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="./" aria-label="EasyNotes home"><img src="./logo.png" alt="" width="30" height="30">EasyNotes</a>
+      <nav class="nav" aria-label="Main">
+        <a class="optional" href="#tour">Tour</a>
+        <a class="optional" href="#features">Features</a>
+        <a href="https://github.com/Legendarulali/EasyNotes">GitHub</a>
+      </nav>
+      <a class="btn btn-primary btn-small" href="#download">Download</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <span class="eyebrow"><b>Open source</b> · Rust + Flutter · MIT licence</span>
+        <h1>Notes in your own <span class="scribble">handwriting.<svg viewBox="0 0 300 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M4 13 C 60 4, 120 18, 180 9 S 270 6, 296 11"/></svg></span></h1>
+        <p class="lede">EasyNotes is a notebook for stylus and touch: ruled and grid notebooks, endless whiteboards and the PDFs you write on. A Rust engine handles the ink, and your notes stay on your device.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://github.com/Legendarulali/EasyNotes/releases">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 19h16"/></svg>
+            Download
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/Legendarulali/EasyNotes">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></svg>
+            Source code
+          </a>
+        </div>
+        <p class="platforms">For Windows and Linux 2-in-1s, Android tablets and iPad</p>
+        <a class="scroll-cue" href="#tour"><span aria-hidden="true"></span>Scroll for the tour</a>
+      </div>
+    </section>
+
+    <!-- ============================================================ scroll-driven tour -->
+    <section id="tour" aria-label="Product tour">
+      <div class="tour-track" data-tour>
+        <div class="stage">
+          <ol class="stage-nav" aria-label="Tour chapters">
+            <li><button type="button" data-goto="0.02"><span>Library</span></button></li>
+            <li><button type="button" data-goto="0.29"><span>Create</span></button></li>
+            <li><button type="button" data-goto="0.44"><span>Canvas</span></button></li>
+            <li><button type="button" data-goto="0.61"><span>Pin &amp; tools</span></button></li>
+            <li><button type="button" data-goto="0.92"><span>Split screen</span></button></li>
+          </ol>
+
+          <div class="copy-stack">
+            <div class="copy" data-from="0" data-to="0.18">
+              <div class="kicker">01 · Library</div>
+              <h2>Your notes, on your device.</h2>
+              <p>The library is a dark <code>#1E1E1E</code> desk of folders and notebooks, each card showing a live thumbnail of its first page. Every stroke saves locally right away. Sign in with Google only if you want a backup in your own Drive.</p>
+            </div>
+            <div class="copy" data-from="0.18" data-to="0.37">
+              <div class="kicker">02 · Create</div>
+              <h2>Ruled, grid, blank, or any PDF.</h2>
+              <p><b>New</b> makes a Ruled Notebook, a 5&nbsp;mm Grid Notebook, an unbounded Blank Whiteboard or a folder. <b>Import PDF</b> turns lecture slides or a textbook chapter into a notebook you write straight onto.</p>
+            </div>
+            <div class="copy" data-from="0.37" data-to="0.565">
+              <div class="kicker">03 · Canvas</div>
+              <h2>Pages that keep coming.</h2>
+              <p>Pages are 1000&nbsp;×&nbsp;1000 and stacked without gaps. Scroll or write near the end and the next one appears; blank pages you only scrolled past are dropped on close. Sticky notes go anywhere, and the optional magic wand snaps rough shapes into clean geometry.</p>
+            </div>
+            <div class="copy" data-from="0.565" data-to="0.655">
+              <div class="kicker">04 · Pin to screen</div>
+              <h2>Keep the formula in view.</h2>
+              <p>Select a matrix, theorem or diagram and tap <b>Pin</b>. It becomes a sharp floating card that stays put while you scroll down the pages, switch tabs or go Home. Pins are never saved into the notebook or its exported PDF.</p>
+            </div>
+            <div class="copy" data-from="0.655" data-to="0.855">
+              <div class="kicker">04 · Tools</div>
+              <h2>One toolbar, docked where you like.</h2>
+              <p>Pen, pencil and highlighter, two erasers, lasso and box selection, sticky notes and a 100-step undo, in a toolbar you can drag to any edge or corner. The top bar holds shape snap, finger drawing, split view and PDF export.</p>
+            </div>
+            <div class="copy" data-from="0.855" data-to="1.01">
+              <div class="kicker">05 · Split screen</div>
+              <h2>Two notebooks. One screen.</h2>
+              <p>The textbook PDF on the left, your homework on the right, or one notebook twice. Each pane scrolls and zooms on its own, and your palm can rest on either.</p>
+              <div class="cta-row">
+                <a class="btn btn-primary btn-small" href="https://github.com/Legendarulali/EasyNotes/releases">Download EasyNotes</a>
+                <a class="btn btn-ghost btn-small" href="#features">Every feature</a>
+              </div>
+            </div>
+          </div>
+
+          <div class="frame">
+            <div class="titlebar" aria-hidden="true">
+              <img src="./logo.png" alt="">EasyNotes
+              <div class="winbtns">
+                <i><svg viewBox="0 0 10 10"><path d="M1 5h8" stroke="currentColor"/></svg></i>
+                <i><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" fill="none" stroke="currentColor"/></svg></i>
+                <i><svg viewBox="0 0 10 10"><path d="M1.5 1.5l7 7m0-7-7 7" stroke="currentColor"/></svg></i>
+              </div>
+            </div>
+            <div class="viewport">
+              <div class="camera">
+                <img data-shot="home" src="./assets/screen_home.png" width="2560" height="1600" alt="The EasyNotes library: folders and notebook cards with first-page thumbnails, Import PDF and New buttons, and the Google account badge showing the backup is synced.">
+                <img data-shot="menu" src="./assets/screen_new_menu.png" width="2560" height="1600" alt="The New menu open: Ruled Notebook, Grid Notebook, Blank Whiteboard, New Folder and Import PDF.">
+                <img data-shot="editor" src="./assets/screen_editor.png" width="2560" height="1600" alt="A grid notebook with handwritten matrix notes, a highlighter mark, sticky notes and snapped shapes, under the floating toolbar.">
+                <img data-shot="pin" src="./assets/screen_pin_action.png" width="2560" height="1600" alt="Page 2 of the notebook with the quadratic formula selected and the Pin button highlighted, while a pinned card of the matrix from page 1 floats on the right.">
+                <img data-shot="split" src="./assets/screen_split.png" width="2560" height="1600" alt="Split screen: an annotated lecture PDF on the left and a homework notebook on the right, with notebook tabs in the top bar.">
+              </div>
+              <svg class="marks" aria-hidden="true">
+                <defs>
+                  <marker id="head-halo" viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse">
+                    <path d="M1 1 9 5 1 9" fill="none" stroke="rgba(0,0,0,.55)" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+                  </marker>
+                  <marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse">
+                    <path d="M1 1 9 5 1 9" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </marker>
+                  <marker id="head-feature" viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse">
+                    <path d="M1 1 9 5 1 9" fill="none" stroke="#ffd36b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </marker>
+                </defs>
+                <g class="marks-layer"></g>
+              </svg>
+              <div class="labels"></div>
+            </div>
+          </div>
+          <ol class="legend" aria-live="polite"></ol>
+        </div>
+      </div>
+
+      <!-- Same story without the scroll animation (no JavaScript, or reduced motion). -->
+      <div class="tour-static wrap">
+        <figure>
+          <figcaption><div class="kicker">01 · Library</div><h2>Your notes, on your device.</h2>
+            <p>Folders and notebooks with live first-page thumbnails. Everything saves locally; Google Drive backup is optional.</p>
+            <ul><li>Folders &amp; subfolders</li><li>Live thumbnails</li><li>PDFs as notebooks</li><li>Drive backup status</li></ul></figcaption>
+          <img src="./assets/screen_home.png" width="2560" height="1600" loading="lazy" alt="The EasyNotes library with folders, notebook thumbnails and the synced Google account badge.">
+        </figure>
+        <figure>
+          <figcaption><div class="kicker">02 · Create</div><h2>Ruled, grid, blank, or any PDF.</h2>
+            <p>New makes a Ruled Notebook, a Grid Notebook, a Blank Whiteboard or a folder; Import PDF turns any PDF into a notebook you write on.</p>
+            <ul><li>Ruled Notebook</li><li>Grid Notebook (5&nbsp;mm)</li><li>Blank Whiteboard</li><li>New Folder</li><li>Vector PDF import</li></ul></figcaption>
+          <img src="./assets/screen_new_menu.png" width="2560" height="1600" loading="lazy" alt="The New menu with the notebook types, New Folder and Import PDF.">
+        </figure>
+        <figure>
+          <figcaption><div class="kicker">03 · Canvas</div><h2>Pages that keep coming.</h2>
+            <p>1000 × 1000 pages stacked without gaps, sticky notes, the highlighter, and opt-in shape snap for lines, circles, ellipses, triangles, rectangles, trapezoids, 5–8-sided polygons and stars.</p>
+            <ul><li>Continuous pages</li><li>Sticky notes</li><li>Shape snap in 3–16&nbsp;µs</li><li>PDF annotation</li></ul></figcaption>
+          <img src="./assets/screen_editor.png" width="2560" height="1600" loading="lazy" alt="A grid notebook with handwritten notes, sticky notes and snapped shapes.">
+        </figure>
+        <figure>
+          <figcaption><div class="kicker">04 · Pin to screen &amp; tools</div><h2>Keep the formula in view.</h2>
+            <p>Pin any selection as a floating card rendered at up to 3× screen resolution. Drag it, resize it, make it 75&nbsp;% see-through. It stays on screen while you scroll, and never ends up in the notebook or its PDF.</p>
+            <ul><li>Pin to screen</li><li>Pen · pencil · highlighter</li><li>Stroke &amp; classic eraser</li><li>Lasso &amp; box select</li><li>100-step undo</li><li>Finger drawing toggle</li></ul></figcaption>
+          <img src="./assets/screen_pin_action.png" width="2560" height="1600" loading="lazy" alt="The selection bar with the Pin button and a pinned reference card floating over page 2.">
+        </figure>
+        <figure>
+          <figcaption><div class="kicker">05 · Split screen</div><h2>Two notebooks. One screen.</h2>
+            <p>Side by side with a draggable divider, separate zoom and scroll per pane, and palm rejection across both panes.</p>
+            <ul><li>Ctrl+\ split</li><li>Ctrl+Tab tabs</li><li>Shared clipboard</li><li>Same notebook twice</li></ul></figcaption>
+          <img src="./assets/screen_split.png" width="2560" height="1600" loading="lazy" alt="Split screen with an annotated PDF on the left and a homework notebook on the right.">
+        </figure>
+      </div>
+    </section>
+
+    <!-- ============================================================ numbers -->
+    <section class="numbers" aria-label="EasyNotes in numbers">
+      <div class="wrap">
+        <div><strong>3–16&nbsp;µs</strong><span>to recognise a shape on pen-up</span></div>
+        <div><strong>100</strong><span>undo steps per notebook</span></div>
+        <div><strong>3×</strong><span>screen resolution for pinned cards</span></div>
+        <div><strong>0</strong><span>analytics, ads or EasyNotes servers</span></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ feature matrix -->
+    <section class="features" id="features">
+      <div class="wrap">
+        <div class="section-head">
+          <div class="kicker">Everything in the box</div>
+          <h2>Every feature, at a glance.</h2>
+          <p>A Rust engine owns the document; Flutter draws it. Everything below works offline.</p>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="m3 7 9 5 9-5M12 12v10"/></svg></div>
+            <h3>Rust core engine</h3>
+            <p>A memory-safe engine (<code>rust_engine</code>) owns strokes, pages, selection, erasing and undo. It turns each stroke into variable-width ink with round joins, indexes everything in a QuadTree for fast hit tests, and recognises shapes in under 20&nbsp;µs.</p>
+            <ul><li>QuadTree</li><li>Pressure-sensitive ink</li><li>flutter_rust_bridge</li></ul>
+          </article>
+          <article class="card">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+            <h3>Workspaces &amp; paper types</h3>
+            <p>Ruled Notebooks, 5&nbsp;mm Grid Notebooks and unbounded Blank Whiteboards, organised in nested folders. Import any PDF straight into a notebook. Rename, move or delete from a right-click or long-press.</p>
+            <ul><li>Ruled</li><li>Grid</li><li>Whiteboard</li><li>Folders</li><li>PDF import</li></ul>
+          </article>
+          <article class="card">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="9" rx="1.5"/><rect x="5" y="13" width="14" height="9" rx="1.5"/></svg></div>
+            <h3>Smart pagination &amp; status bar</h3>
+            <p>1000&nbsp;×&nbsp;1000 pages stacked with no gap. Scrolling or writing near the end appends the next page, and blank trailing pages you only scrolled past are dropped on close. The status bar shows zoom, position and <i>Page X / Y</i>. Tap it, or press <kbd>Ctrl</kbd>+<kbd>0</kbd>, to reset to 100&nbsp;%.</p>
+          </article>
+          <article class="card">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5z"/><path d="m15 5 4 4"/></svg></div>
+            <h3>Precision inking, touch fallback &amp; two erasers</h3>
+            <p>The first stylus contact turns on palm rejection: fingers pan and zoom. One tap in the top bar switches to finger drawing for when the stylus battery runs out. Pen, pencil and highlighter; 8 swatches plus any hex colour; a thickness slider. The <b>Stroke eraser</b> removes whole strokes, and the <b>Classic eraser</b> cuts them exactly where it passes, keeping sharp corners.</p>
+          </article>
+          <article class="card">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z"/></svg></div>
+            <h3>9-shape instant geometry snap</h3>
+            <p>Turn on the magic wand (it is off by default) and rough shapes snap on pen-up: lines, circles, ellipses, triangles, rectangles and squares, trapezoids, 5- to 8-sided polygons and five-pointed stars. Letters written at text size stay ink.</p>
+            <ul><li>3–16&nbsp;µs per stroke</li><li>Off by default</li></ul>
+          </article>
+          <article class="card highlight">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v8"/></svg></div>
+            <h3>Pin-to-screen reference cards</h3>
+            <p>Select a formula or diagram and tap <b>Pin</b>. EasyNotes renders it on its page background at up to 3× screen resolution, into a floating card you can drag and resize (aspect ratio locked), switch between 100&nbsp;% and 75&nbsp;% opacity, or close. Cards stay on screen while you scroll, switch tabs and go Home, and never end up in the notebook or its PDF.</p>
+          </article>
+          <article class="card">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg></div>
+            <h3>50/50 split screen &amp; tabs</h3>
+            <p>Two panes side by side with a draggable divider (<kbd>Ctrl</kbd>+<kbd>\</kbd>): two notebooks, or one notebook twice. Each pane scrolls and zooms on its own, and palm rejection covers both. Tabs switch instantly with <kbd>Ctrl</kbd>+<kbd>Tab</kbd>, and the clipboard is shared, so you can copy in one notebook and paste in another.</p>
+          </article>
+          <article class="card">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg></div>
+            <h3>Full undo / redo &amp; vector PDF export</h3>
+            <p>Every edit is one step: strokes, eraser drags, moves, pastes, sticky notes. 100 steps per notebook (about 64&nbsp;MB at most), with <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd>. Export to a vector PDF that embeds imported pages as vector content, so their text stays selectable.</p>
+          </article>
+          <article class="card">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18a4.5 4.5 0 0 1-.5-9 6 6 0 0 1 11.6 1.5A3.8 3.8 0 0 1 17.5 18z"/><path d="m9.5 13.5 2 2 3.5-3.5"/></svg></div>
+            <h3>Local-first + Google Drive backup</h3>
+            <p>Saving is local and instant, and no account is needed. If you sign in with Google, the app backs up to <code>My Drive › EasyNotes/</code> every 3&nbsp;minutes, when you close a tab, and before the app closes. It uses only the <code>drive.file</code> scope, so it can see only files it created. On Windows the session is encrypted with DPAPI.</p>
+            <ul><li>drive.file only</li><li>Incremental</li><li>DPAPI</li></ul>
+          </article>
+          <article class="card">
+            <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="13" height="10" rx="1.5"/><rect x="17" y="8" width="5" height="11" rx="1.2"/><path d="M5 19h7"/></svg></div>
+            <h3>Cross-platform architecture</h3>
+            <p>One Rust engine and one Flutter app, for Windows and Linux 2-in-1 laptops, Android tablets and iPad. The engine and the UI talk through <code>flutter_rust_bridge</code>.</p>
+            <ul><li>Windows</li><li>Linux</li><li>Android</li><li>iPadOS</li></ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ download -->
+    <section class="download" id="download">
+      <div class="wrap">
+        <div class="panel">
+          <img class="logo" src="./logo.png" width="88" height="88" alt="EasyNotes logo">
+          <h2>Start writing.</h2>
+          <p>EasyNotes is free and open source under the MIT licence. Builds are published on GitHub Releases, or you can build it yourself with Flutter and Rust.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="https://github.com/Legendarulali/EasyNotes/releases">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 19h16"/></svg>
+              GitHub Releases
+            </a>
+            <a class="btn btn-ghost" href="https://github.com/Legendarulali/EasyNotes">View the source</a>
+          </div>
+          <p class="small">No account required · Google Drive backup is optional · <a href="./privacy.html">How your data is handled</a></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>© 2026 Legendarulali · EasyNotes is MIT-licensed</span>
+      <nav aria-label="Footer">
+        <a href="./privacy.html">Privacy Policy</a>
+        <a href="./terms.html">Terms of Service</a>
+        <a href="https://github.com/Legendarulali/EasyNotes">GitHub</a>
+        <a href="https://github.com/Legendarulali/EasyNotes/issues">Contact</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="./assets/tour.js" defer></script>
+</body>
+</html>

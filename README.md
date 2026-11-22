@@ -211,6 +211,18 @@ cd flutter_app && flutter test integration_test -d windows    # end-to-end throu
 
 `pdfrx` builds a small C helper through Dart native assets. `native_toolchain_c` ≥ 0.19.6 is needed when the pub cache path contains spaces (`C:\Users\First Last\...`); the lock file pins it.
 
+## Website
+
+`docs/` is the project site for GitHub Pages (Settings › Pages › Deploy from a branch › `main` / `/docs`): a scroll-driven tour (`index.html`, `assets/tour.js`, `assets/site.css`) plus the `privacy.html` and `terms.html` pages linked from Google's OAuth consent screen. It is plain HTML, CSS and JavaScript with no build step, external fonts or third-party scripts.
+
+The screenshots in `docs/assets/` and `docs/logo.png` come from the real app, with demo content and a fake Google account and Drive (no OAuth client or network needed):
+
+```bash
+cd flutter_app && flutter test integration_test/website_screenshots_test.dart -d windows --dart-define=SCREENSHOT_DIR=C:/path/to/easynotes/docs
+```
+
+Without `SCREENSHOT_DIR` the test is skipped. If the UI moves, update the callout boxes in `docs/assets/tour.js` too; they are fractions of the 2560 × 1600 screenshots.
+
 ## Not in this prototype
 
 This prototype does not include:
