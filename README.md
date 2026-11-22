@@ -224,6 +224,12 @@ cd flutter_app && flutter test integration_test/website_screenshots_test.dart -d
 
 Without `SCREENSHOT_DIR` the test is skipped. If the UI moves, update the callout boxes in `docs/assets/tour.js` too; they are fractions of the 2560 × 1600 screenshots.
 
+The logo is drawn in code (`flutter_app/lib/src/ui/app_logo.dart`). The Windows app icon, `flutter_app/windows/runner/resources/app_icon.ico` (16–256 px), is rendered from it:
+
+```bash
+cd flutter_app && flutter test tool/generate_app_icon.dart
+```
+
 ## Not in this prototype
 
 This prototype does not include:
