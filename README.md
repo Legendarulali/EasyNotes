@@ -1,5 +1,7 @@
 # EasyNotes
 
+> **Need help or found a bug?** See [SUPPORT.md](./SUPPORT.md) or [open an issue](https://github.com/Legendarulali/EasyNotes/issues).
+
 Handwritten note-taking prototype for Android, iOS and Windows/Linux 2-in-1s.
 **Rust** owns the document: stroke processing, shape recognition, erasing, the spatial index, pages, PDF import, saving and PDF export.
 **Flutter** owns the library screens, input routing, rendering and UI.
