@@ -223,6 +223,42 @@ void main() {
     expect(getScene().strokes, hasLength(2));
   });
 
+  test('recolouring the selection through the bridge is one undo step', () {
+    final a = _drawPolyline(const [Offset(20, 20), Offset(120, 20)], autoCorrect: false)!;
+    final b = _drawPolyline(const [Offset(20, 80), Offset(120, 80)], autoCorrect: false)!;
+    final c = _drawPolyline(const [Offset(20, 400), Offset(120, 400)], autoCorrect: false)!;
+    selectInRegion(rect: const ViewportRect(left: 0, top: 0, right: 200, bottom: 120));
+
+    final delta = recolorSelection(color: 0xFFD32F2F);
+    expect(delta.upsertedStrokes.map((s) => s.id), unorderedEquals([a.id, b.id]));
+    expect(delta.upsertedStrokes.every((s) => s.color == 0xFFD32F2F), isTrue);
+    expect(delta.selection.ids, unorderedEquals([a.id, b.id]), reason: 'the selection stays');
+    final scene = getScene().strokes;
+    expect(scene.map((s) => s.id), [a.id, b.id, c.id], reason: 'ids and z-order kept');
+    expect(scene.map((s) => s.color), [0xFFD32F2F, 0xFFD32F2F, 0xFF1A1A1A]);
+
+    undo();
+    expect(getScene().strokes.map((s) => s.color), everyElement(0xFF1A1A1A), reason: 'one step undoes both');
+    redo();
+    expect(getScene().strokes.map((s) => s.color), [0xFFD32F2F, 0xFFD32F2F, 0xFF1A1A1A]);
+    undo();
+    undo();
+    expect(getScene().strokes.map((s) => s.id), [a.id, b.id], reason: 'the step before was drawing c');
+  });
+
+  test('whiteboard page guides follow the content', () {
+    expect(whiteboardPageGuides(), isEmpty, reason: 'notebooks have real pages');
+    newDocument(slot: 0, kind: DocumentKind.whiteboard, paper: PaperStyle.whiteboard);
+    _drawPolyline(const [Offset(0, 0), Offset(800, 0)], autoCorrect: false);
+    expect(whiteboardPageGuides(), hasLength(1));
+    _drawPolyline(const [Offset(0, 3000), Offset(800, 3000)], autoCorrect: false);
+    final pages = whiteboardPageGuides();
+    expect(pages.length, greaterThan(1));
+    for (var i = 1; i < pages.length; i++) {
+      expect(pages[i].top, closeTo(pages[i - 1].bottom, 0.01), reason: 'slices follow each other');
+    }
+  });
+
   test('transforms never leave the page column', () {
     _drawPolyline(const [Offset(10, 10), Offset(80, 10)], autoCorrect: false);
     selectInRegion(rect: const ViewportRect(left: 0, top: 0, right: 100, bottom: 40));

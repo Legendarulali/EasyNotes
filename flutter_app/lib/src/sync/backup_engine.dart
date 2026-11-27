@@ -24,6 +24,24 @@ class BackupReport {
       'unchanged $unchangedFiles';
 }
 
+/// What [BackupEngine.restore] brought back.
+class RestoreReport {
+  int restoredNotebooks = 0;
+  int restoredFolders = 0;
+  int downloadedBytes = 0;
+
+  /// Notebooks in the backup that were left out: deleted on this device since they were
+  /// backed up, or with a name that is not a valid file name.
+  int skippedNotebooks = 0;
+
+  bool get restoredAnything => restoredNotebooks + restoredFolders > 0;
+
+  @override
+  String toString() =>
+      'restored $restoredNotebooks notebook(s) and $restoredFolders folder(s) ($downloadedBytes B), '
+      'skipped $skippedNotebooks';
+}
+
 /// MD5 of [bytes] as lowercase hex (Drive's `md5Checksum` format). Large inputs are
 /// hashed on a background isolate so the UI never stalls.
 Future<String> md5Hex(Uint8List bytes) async {
@@ -69,7 +87,18 @@ class BackupEngine {
     'thumb.png': 'image/png',
   };
 
+  /// Names the backup folder may have in "My Drive" when it lacks the app property that
+  /// normally identifies it (the app was called `flutter_app` before it became EasyNotes).
+  /// With the `drive.file` scope only folders this app created are visible.
+  static const List<String> legacyRootNames = [rootName, 'flutter_app'];
+
   File get stateFile => File('${library.root.path}${Platform.pathSeparator}.backup-state.json');
+
+  /// Present while a restore is unfinished (it continues on the next run).
+  File get restoreMarker => File('${library.root.path}${Platform.pathSeparator}.restore-pending');
+
+  /// Notebooks being downloaded (moved into the library once complete).
+  Directory get _restoreStaging => Directory('${library.root.path}${Platform.pathSeparator}.restoring');
 
   final Set<String> _verified = {};
 
@@ -120,6 +149,155 @@ class BackupEngine {
     return report;
   }
 
+  /// Whether a restore was interrupted (offline, app closed) and still has work to do.
+  Future<bool> restoreInterrupted() => restoreMarker.exists();
+
+  /// Downloads the Drive backup into the library: every folder and notebook of the backup
+  /// that is not on this device yet. Meant for an empty library (new device, reinstall).
+  ///
+  /// * Nothing local is overwritten: a notebook whose name is taken locally is restored
+  ///   under a free name ("Name (2)").
+  /// * Notebooks this device backed up and then deleted are not brought back.
+  /// * Each notebook appears only once all its files are downloaded (into a hidden
+  ///   staging folder first), so an interrupted restore never leaves half a notebook;
+  ///   the next call continues with the rest ([restoreInterrupted]).
+  /// * The restored files are recorded as backed up, so the next [run] uploads nothing.
+  ///
+  /// Throws on the first network failure (work done so far is kept).
+  Future<RestoreReport> restore({void Function(int done, int total)? onProgress}) async {
+    final report = RestoreReport();
+    final state = await _loadState();
+    var root = state.rootId;
+    if (root == null || !await remote.isAlive(root)) {
+      root = await _findRoot();
+      if (root == null) {
+        await _deleteQuietly(restoreMarker);
+        return report;
+      }
+      if (root != state.rootId) {
+        state
+          ..rootId = root
+          ..folders.clear()
+          ..notebooks.clear();
+      }
+    }
+    await restoreMarker.writeAsString('1', flush: true);
+    await _deleteQuietly(_restoreStaging);
+
+    // The backup's tree: folders, and notebook bundles (folders named `*.enote`).
+    final folders = <(String path, String id)>[];
+    final notebooks = <(String parent, String name, String id)>[];
+    Future<void> walk(String id, String rel) async {
+      final children = await remote.listChildren(id)
+        ..sort((a, b) => a.name.compareTo(b.name));
+      for (final child in children.where((c) => c.isFolder)) {
+        if (!_isSafeName(child.name)) {
+          report.skippedNotebooks++;
+          continue;
+        }
+        if (child.name.endsWith(kNotebookExtension)) {
+          notebooks.add((rel, child.name, child.id));
+        } else {
+          final path = rel.isEmpty ? child.name : '$rel/${child.name}';
+          folders.add((path, child.id));
+          await walk(child.id, path);
+        }
+      }
+    }
+
+    await walk(root, '');
+
+    final restoredIds = {for (final rec in state.notebooks.values) rec.folderId};
+    final deletedFolders = <String>{};
+    for (final (path, id) in folders) {
+      final dir = _localDir(path);
+      if (await dir.exists()) {
+        state.folders.putIfAbsent(path, () => id);
+        continue;
+      }
+      // Backed up from here and deleted since (the next run trashes it in Drive).
+      if (state.folders.containsKey(path)) {
+        deletedFolders.add(path);
+        continue;
+      }
+      await dir.create(recursive: true);
+      state.folders[path] = id;
+      report.restoredFolders++;
+    }
+    await _saveState(state);
+
+    final todo = [
+      for (final nb in notebooks)
+        if (!restoredIds.contains(nb.$3) && !deletedFolders.any((f) => nb.$1 == f || nb.$1.startsWith('$f/'))) nb,
+    ];
+    report.skippedNotebooks += notebooks.length - todo.length;
+    onProgress?.call(0, todo.length);
+    for (final (i, (parent, name, id)) in todo.indexed) {
+      await _restoreNotebook(state, parent, name, id, report);
+      onProgress?.call(i + 1, todo.length);
+    }
+    await _deleteQuietly(_restoreStaging);
+    await _deleteQuietly(restoreMarker);
+    return report;
+  }
+
+  Future<void> _restoreNotebook(_State state, String parent, String name, String folderId, RestoreReport report) async {
+    final staging = Directory('${_restoreStaging.path}${Platform.pathSeparator}$folderId');
+    await _deleteQuietly(staging);
+    await staging.create(recursive: true);
+    // File name → (Drive id, MD5 of what was downloaded).
+    final downloaded = <String, (String, String)>{};
+    for (final child in await remote.listChildren(folderId)) {
+      if (child.isFolder || !syncedFiles.containsKey(child.name) || downloaded.containsKey(child.name)) continue;
+      final bytes = await remote.download(child.id);
+      await File('${staging.path}${Platform.pathSeparator}${child.name}').writeAsBytes(bytes, flush: true);
+      downloaded[child.name] = (child.id, await md5Hex(bytes));
+      report.downloadedBytes += bytes.length;
+    }
+    final parentDir = _localDir(parent);
+    await parentDir.create(recursive: true);
+    final base = name.substring(0, name.length - kNotebookExtension.length);
+    final dirName = '${library.uniqueName(parentDir, base, notebook: true)}$kNotebookExtension';
+    final dir = await staging.rename('${parentDir.path}${Platform.pathSeparator}$dirName');
+    report.restoredNotebooks++;
+
+    // Record it as backed up, as `run` would after uploading it. Reading it may give an
+    // old notebook its id (rewriting meta.json): a file that no longer matches the
+    // download is left for the next run to upload.
+    final entry = await library.readNotebook(dir);
+    final rel = parent.isEmpty ? dirName : '$parent/$dirName';
+    var key = entry.meta.id.isEmpty ? 'path:$rel' : entry.meta.id;
+    if (state.notebooks.containsKey(key)) key = '$key@$rel';
+    final files = <String, _FileRecord>{};
+    for (final MapEntry(key: fileName, value: (id, digest)) in downloaded.entries) {
+      final file = File('${dir.path}${Platform.pathSeparator}$fileName');
+      final stat = await file.stat();
+      if (stat.type != FileSystemEntityType.file) continue;
+      final same = await md5Hex(await file.readAsBytes()) == digest;
+      files[fileName] = same
+          ? _FileRecord(id, size: stat.size, modified: stat.modified.millisecondsSinceEpoch, md5: digest)
+          : _FileRecord(id, size: -1, modified: -1, md5: digest);
+    }
+    state.notebooks[key] = _NotebookRecord(folderId, parent: parent, name: dirName, files: files);
+    await _saveState(state);
+  }
+
+  /// A Drive folder name that is safe to use as one local path segment.
+  static bool _isSafeName(String name) =>
+      name.isNotEmpty && !name.startsWith('.') && !name.contains(RegExp(r'[\\/:*?"<>|\x00-\x1F]'));
+
+  Directory _localDir(String rel) => rel.isEmpty
+      ? library.root
+      : Directory([library.root.path, ...rel.split('/')].join(Platform.pathSeparator));
+
+  static Future<void> _deleteQuietly(FileSystemEntity e) async {
+    try {
+      if (await e.exists()) await e.delete(recursive: true);
+    } on FileSystemException {
+      // Best effort (e.g. a file still open on Windows); retried next time.
+    }
+  }
+
   // ------------------------------------------------------------------ steps
 
   Future<void> _ensureRoot(_State state) async {
@@ -131,13 +309,25 @@ class BackupEngine {
     // First run, or the backup folder was deleted in Drive: find an existing backup
     // (earlier install / other device) or start a new one. Everything recorded for the
     // old root is void.
-    final root = await remote.findRoot() ?? await remote.createRoot(rootName);
+    final root = await _findRoot() ?? await remote.createRoot(rootName);
     state
       ..rootId = root
       ..folders.clear()
       ..notebooks.clear();
     _verified.add(root);
     await _saveState(state);
+  }
+
+  /// The existing backup folder: the one tagged by an earlier run, else a folder with one
+  /// of the [legacyRootNames] in "My Drive".
+  Future<String?> _findRoot() async {
+    final tagged = await remote.findRoot();
+    if (tagged != null) return tagged;
+    for (final name in legacyRootNames) {
+      final legacy = await remote.findFolder(name, 'root');
+      if (legacy != null) return legacy;
+    }
+    return null;
   }
 
   /// Drive folder for the library folder at relative [path] (`a/b`), created if needed.

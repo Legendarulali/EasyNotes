@@ -176,6 +176,8 @@ class EditorAppBar extends StatelessWidget {
               onExport();
             case _MoreAction.split:
               _toggleSplit();
+            case _MoreAction.pageGuides:
+              controller.setShowPageGuides(!controller.showPageGuides);
             case _MoreAction.clear:
               onClear();
           }
@@ -220,6 +222,12 @@ class EditorAppBar extends StatelessWidget {
                 contentPadding: EdgeInsets.zero,
               ),
             ),
+          if (controller.isOpen && !controller.isPaged)
+            CheckedPopupMenuItem<Object>(
+              value: _MoreAction.pageGuides,
+              checked: controller.showPageGuides,
+              child: const Text('Show page guides'),
+            ),
           const PopupMenuItem<Object>(
             value: _MoreAction.clear,
             child: ListTile(
@@ -236,7 +244,7 @@ class EditorAppBar extends StatelessWidget {
 }
 
 /// Entries of the editor's "More" menu (besides the paper styles on phones).
-enum _MoreAction { paste, export, split, clear }
+enum _MoreAction { paste, export, split, pageGuides, clear }
 
 /// The open notebooks as a horizontal strip of tabs: tap one to show it (in the focused
 /// pane of a split screen), × (or a middle click) to close it, `+` to open another

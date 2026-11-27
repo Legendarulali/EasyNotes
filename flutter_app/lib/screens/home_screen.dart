@@ -9,7 +9,9 @@ import '../src/editor/open_notebooks.dart';
 import '../src/rust/document/page.dart';
 import '../src/rust/document/paper.dart';
 import '../src/services/library_service.dart';
+import '../src/services/update_service.dart';
 import '../src/sync/sync_service.dart';
+import '../widgets/home_banners.dart';
 import '../widgets/sync_widgets.dart';
 import 'editor_screen.dart';
 
@@ -21,10 +23,13 @@ const Color _cardBorder = Color(0xFF353538);
 /// Library dashboard: folders and notebooks of the current folder, a "New" menu
 /// (Ruled / Grid notebook, Blank whiteboard, folder) and PDF import.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.library, required this.sync});
+  const HomeScreen({super.key, required this.library, required this.sync, this.updates});
 
   final LibraryService library;
   final SyncService sync;
+
+  /// Newer releases on GitHub (a dismissible banner above the library).
+  final UpdateService? updates;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -42,17 +47,34 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   bool _busy = false;
   final Map<String, Future<Uint8List?>> _thumbs = {};
+  late int _libraryRevision = widget.sync.libraryRevision;
 
   @override
   void initState() {
     super.initState();
+    widget.sync.addListener(_onSyncChanged);
     _refresh();
   }
 
   @override
   void dispose() {
+    widget.sync.removeListener(_onSyncChanged);
     _tabs.dispose();
     super.dispose();
+  }
+
+  /// A restore from Google Drive added notebooks: show them.
+  void _onSyncChanged() {
+    final revision = widget.sync.libraryRevision;
+    if (revision == _libraryRevision || !mounted) return;
+    _libraryRevision = revision;
+    _thumbs.clear();
+    _refresh();
+    final report = widget.sync.lastRestore;
+    if (report != null && widget.sync.phase != SyncPhase.restoring) {
+      final n = report.restoredNotebooks;
+      _toast(n == 1 ? 'Restored 1 notebook from Google Drive.' : 'Restored $n notebooks from Google Drive.');
+    }
   }
 
   Future<void> _refresh() async {
@@ -372,7 +394,26 @@ class _HomeScreenState extends State<HomeScreen> {
               ? const PreferredSize(preferredSize: Size.fromHeight(2), child: LinearProgressIndicator(minHeight: 2))
               : null,
         ),
-        body: _loading
+        body: Column(
+          children: [
+            RestoreBanner(sync: widget.sync),
+            if (widget.updates case final updates?)
+              UpdateBanner(updates: updates, sync: widget.sync, libraryPath: lib.root.path),
+            Expanded(child: _body(crumbs)),
+          ],
+        ),
+        floatingActionButton: compact
+            ? FloatingActionButton.extended(
+                onPressed: _busy ? null : () => _showNewSheet(context),
+                icon: const Icon(Icons.add),
+                label: const Text('New'),
+              )
+            : null,
+      ),
+    );
+  }
+
+  Widget _body(List<String> crumbs) => _loading
             ? const Center(child: CircularProgressIndicator())
             : _entries.isEmpty
             ? _EmptyState(onNew: _onNew, inFolder: crumbs.isNotEmpty)
@@ -404,17 +445,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     };
                   },
                 ),
-              ),
-        floatingActionButton: compact
-            ? FloatingActionButton.extended(
-                onPressed: _busy ? null : () => _showNewSheet(context),
-                icon: const Icon(Icons.add),
-                label: const Text('New'),
-              )
-            : null,
-      ),
-    );
-  }
+              );
 
   Future<void> _showNewSheet(BuildContext context) async {
     final action = await showModalBottomSheet<_NewAction>(

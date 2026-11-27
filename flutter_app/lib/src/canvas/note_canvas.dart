@@ -613,6 +613,7 @@ class _NoteCanvasState extends State<NoteCanvas> {
                     fit: StackFit.expand,
                     children: [
                       RepaintBoundary(child: CustomPaint(painter: ScenePainter(c, view))),
+                      if (!c.isPaged) CustomPaint(painter: PageGuidesPainter(c, view)),
                       RepaintBoundary(child: CustomPaint(painter: LivePainter(c, view))),
                       CustomPaint(painter: SelectionOverlayPainter(c, view)),
                     ],

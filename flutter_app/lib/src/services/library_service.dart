@@ -154,6 +154,16 @@ class LibraryService {
 
   bool isRoot(Directory folder) => _same(folder.path, root.path);
 
+  /// No notebooks and no folders at all (a new device or a fresh install). App files
+  /// such as the settings do not count.
+  Future<bool> isEmpty() async {
+    if (!await root.exists()) return true;
+    await for (final e in root.list(followLinks: false)) {
+      if (e is Directory && !_basename(e.path).startsWith('.')) return false;
+    }
+    return true;
+  }
+
   /// Folders first (A–Z), then notebooks (most recently modified first).
   Future<List<LibraryEntry>> list(Directory folder) async {
     final folders = <FolderEntry>[];

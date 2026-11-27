@@ -9,15 +9,20 @@
 //!   Notebook pages (1000 × 1000 units) become 750 × 750 pt (1 unit = 0.75 pt, so the 5 mm
 //!   grid stays 5 mm on paper). PDF-backed pages get the source page's exact size, with
 //!   the source page re-embedded underneath as a vector Form XObject.
-//! - **Whiteboards** are cut into A-series-proportioned pages (width ≥ A4) stacked
-//!   downwards, covering all content.
+//!   Blank pages at the end (appended while scrolling or writing) are not exported.
+//! - **Whiteboards** become A4 portrait pages stacked downwards: the content is scaled
+//!   to fit the page width and page breaks move into the gaps between lines of writing
+//!   ([`smart_page_breaks`]).
 //!
 //! Text: if a TrueType font was registered (see `set_export_font`) it is embedded as a
 //! CID font with a ToUnicode map, so Romanian diacritics (ă â î ș ț) survive. Otherwise
 //! the built-in Helvetica is used with a WinAnsi transliteration fallback.
 
 use super::pdf_embed::{PdfEmbedder, RefAlloc};
-use crate::document::{CanvasPage, DocumentKind, PaperKind, PaperSpec, PaperStyle};
+use crate::document::page::without_trailing_blank;
+use crate::document::{
+    CanvasPage, DocumentKind, PaperKind, PaperSpec, PaperStyle, PAGE_COVER_TOLERANCE,
+};
 use crate::geometry::{RenderKind, StickyNote, Stroke, StrokeRender, ToolType, ViewportRect};
 use anyhow::{Context, Result};
 use miniz_oxide::deflate::compress_to_vec_zlib;
@@ -30,7 +35,14 @@ use std::collections::{BTreeMap, HashMap};
 pub const PT_PER_UNIT: f32 = 0.75;
 const A4_WIDTH_PT: f32 = 595.28;
 const A4_HEIGHT_PT: f32 = 841.89;
-const PAGE_MARGIN: f32 = 40.0;
+/// Whiteboard pages: blank border around the content on every side.
+pub const WHITEBOARD_MARGIN_PT: f32 = 24.0;
+/// Room left above the line of writing a smart page break moves to the next page.
+const BREAK_PADDING_PT: f32 = 10.0;
+/// A smart page break may give up at most this share of a page's usable height;
+/// otherwise the page is cut where it is full.
+pub const MAX_BREAK_SHIFT: f32 = 0.35;
+const MAX_WHITEBOARD_PAGES: usize = 10_000;
 /// Acrobat's implementation limit for page dimensions.
 const MAX_PAGE_PT: f32 = 14_400.0;
 const NOTE_PADDING: f32 = 10.0;
@@ -61,37 +73,6 @@ pub struct ExportDocument<'a> {
     pub pdf: Option<&'a [u8]>,
 }
 
-/// Whiteboard pagination in world units.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PageLayout {
-    pub page_width: f32,
-    pub page_height: f32,
-    pub page_count: u32,
-    /// Points per world unit.
-    pub scale: f32,
-}
-
-impl PageLayout {
-    pub fn compute(content: Option<ViewportRect>) -> Self {
-        let (max_x, max_y) = content.map_or((0.0, 0.0), |b| (b.right.max(0.0), b.bottom.max(0.0)));
-        let page_width = (A4_WIDTH_PT / PT_PER_UNIT).max(max_x + PAGE_MARGIN);
-        let page_height = page_width * (A4_HEIGHT_PT / A4_WIDTH_PT);
-        let page_count = (((max_y + PAGE_MARGIN) / page_height).ceil() as u32).clamp(1, 10_000);
-        let scale = PT_PER_UNIT.min(MAX_PAGE_PT / page_width);
-        Self {
-            page_width,
-            page_height,
-            page_count,
-            scale,
-        }
-    }
-
-    fn world_rect(&self, page: u32) -> ViewportRect {
-        let top = page as f32 * self.page_height;
-        ViewportRect::new(0.0, top, self.page_width, top + self.page_height)
-    }
-}
-
 /// One page of the output file.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutputPage {
@@ -103,6 +84,9 @@ pub struct OutputPage {
     pub pattern_origin: f32,
     /// Source PDF page drawn underneath.
     pub pdf_page: Option<u32>,
+    /// Part of `area` whose ink and notes belong on this page (whiteboards: the slice
+    /// between two page breaks; the margins show only paper). `None`: all of `area`.
+    pub content: Option<ViewportRect>,
 }
 
 impl OutputPage {
@@ -115,29 +99,34 @@ impl OutputPage {
 }
 
 /// Decides the output pages. `pdf_width` returns a source page's displayed width (pt).
+///
+/// Paged documents get one PDF page per page, except blank pages at the end (added
+/// automatically while scrolling or writing): those are left out. Blank pages between
+/// written ones stay, and an empty document still exports its first page.
 pub fn layout_pages(
     doc: &ExportDocument,
     renders: &[StrokeRender],
     pdf_width: impl Fn(u32) -> Option<f32>,
 ) -> Vec<OutputPage> {
+    let items: Vec<ViewportRect> = renders
+        .iter()
+        .map(|r| r.bounds)
+        .chain(doc.notes.iter().map(StickyNote::rect))
+        .collect();
     if !doc.kind.is_paged() || doc.pages.is_empty() {
-        let content = renders
-            .iter()
-            .map(|r| r.bounds)
-            .chain(doc.notes.iter().map(StickyNote::rect))
-            .reduce(|a, b| a.union(&b));
-        let layout = PageLayout::compute(content);
-        return (0..layout.page_count)
-            .map(|i| OutputPage {
-                area: layout.world_rect(i),
-                scale: layout.scale,
-                pattern_origin: 0.0,
-                pdf_page: None,
-            })
-            .collect();
+        return whiteboard_pages(&items);
     }
+    // Same tolerance as the editor's page trimming: a stroke's edge grazing the next page
+    // does not keep that page.
+    let bottom = items
+        .iter()
+        .map(|r| r.bottom)
+        .filter(|b| b.is_finite())
+        .reduce(f32::max)
+        .map_or(0.0, |b| b - PAGE_COVER_TOLERANCE);
+    let kept = without_trailing_blank(doc.pages, bottom, 1);
     let mut last_scale = PT_PER_UNIT;
-    doc.pages
+    doc.pages[..kept]
         .iter()
         .map(|p| {
             let pdf = p.pdf_page.and_then(|i| pdf_width(i).map(|w| (i, w)));
@@ -152,9 +141,152 @@ pub fn layout_pages(
                 scale,
                 pattern_origin: p.top,
                 pdf_page: pdf.map(|(i, _)| i),
+                content: None,
             }
         })
         .collect()
+}
+
+/// Pages of a whiteboard whose items (strokes, notes) have the bounds `items`.
+///
+/// A4 portrait pages, stacked downwards. The content is cropped to its bounding box and
+/// scaled so its full width fits between the side margins (never enlarged beyond the
+/// notebook scale), so the board is never sliced into columns. Page breaks avoid cutting
+/// through handwriting, see [`smart_page_breaks`]. An empty board gives one blank page.
+pub fn whiteboard_pages(items: &[ViewportRect]) -> Vec<OutputPage> {
+    let finite: Vec<ViewportRect> = items
+        .iter()
+        .copied()
+        .filter(|r| {
+            [r.left, r.top, r.right, r.bottom]
+                .iter()
+                .all(|v| v.is_finite())
+        })
+        .collect();
+    let Some(content) = finite.iter().copied().reduce(|a, b| a.union(&b)) else {
+        return vec![OutputPage {
+            area: ViewportRect::new(
+                0.0,
+                0.0,
+                A4_WIDTH_PT / PT_PER_UNIT,
+                A4_HEIGHT_PT / PT_PER_UNIT,
+            ),
+            scale: PT_PER_UNIT,
+            pattern_origin: 0.0,
+            pdf_page: None,
+            content: None,
+        }];
+    };
+    let usable_width_pt = A4_WIDTH_PT - 2.0 * WHITEBOARD_MARGIN_PT;
+    let scale = if content.width() > 0.0 {
+        PT_PER_UNIT.min(usable_width_pt / content.width())
+    } else {
+        PT_PER_UNIT
+    };
+    let margin = WHITEBOARD_MARGIN_PT / scale;
+    let (page_width, page_height) = (A4_WIDTH_PT / scale, A4_HEIGHT_PT / scale);
+    let left = content.left - margin;
+    let spans: Vec<(f32, f32)> = finite.iter().map(|r| (r.top, r.bottom)).collect();
+    let slices = smart_page_breaks(
+        &spans,
+        content.top,
+        content.bottom,
+        page_height - 2.0 * margin,
+        BREAK_PADDING_PT / scale,
+    );
+    let last = slices.len().saturating_sub(1);
+    slices
+        .iter()
+        .enumerate()
+        .map(|(i, &(top, bottom))| {
+            let area = ViewportRect::new(
+                left,
+                top - margin,
+                left + page_width,
+                top - margin + page_height,
+            );
+            // Nothing lies above the first slice or below the last one: let those pages
+            // show their whole area (no clipping at the very edge of the content).
+            let top = if i == 0 { area.top } else { top };
+            let bottom = if i == last {
+                area.bottom.max(bottom)
+            } else {
+                bottom
+            };
+            OutputPage {
+                area,
+                scale,
+                pattern_origin: 0.0,
+                pdf_page: None,
+                content: Some(ViewportRect::new(area.left, top, area.right, bottom)),
+            }
+        })
+        .collect()
+}
+
+/// Splits the content between `top` and `bottom` into page slices `(top, bottom)` at most
+/// `usable` tall (world units; `spans` are the items' vertical extents).
+///
+/// Smart page break: where a page would end (`cut = slice top + usable`), the items
+/// crossing that line are found. If there are any, the break moves up to just above the
+/// topmost of them, `padding` above it (less if the gap to the writing above is smaller),
+/// so that line of handwriting starts the next page intact. Items overlapping those move
+/// along too. A break never moves up by more than [`MAX_BREAK_SHIFT`] of the page; then
+/// the page is cut where it is full. Only the pagination changes, never the canvas.
+pub fn smart_page_breaks(
+    spans: &[(f32, f32)],
+    top: f32,
+    bottom: f32,
+    usable: f32,
+    padding: f32,
+) -> Vec<(f32, f32)> {
+    if !(top.is_finite() && bottom.is_finite() && usable.is_finite() && usable > 0.0) {
+        return vec![(top, bottom)];
+    }
+    // Runs of items that overlap vertically: a break inside one cuts through ink.
+    let mut sorted: Vec<(f32, f32)> = spans
+        .iter()
+        .copied()
+        .filter(|(a, b)| a.is_finite() && b.is_finite() && b > a)
+        .collect();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut runs: Vec<(f32, f32)> = Vec::new();
+    for (a, b) in sorted {
+        match runs.last_mut() {
+            Some(run) if a < run.1 => run.1 = run.1.max(b),
+            _ => runs.push((a, b)),
+        }
+    }
+
+    let padding = padding.max(0.0);
+    let mut slices = Vec::new();
+    let mut y = top;
+    loop {
+        let cut = y + usable;
+        if cut >= bottom || slices.len() + 1 >= MAX_WHITEBOARD_PAGES {
+            slices.push((y, bottom));
+            return slices;
+        }
+        // The run the page end falls into (strictly inside: touching is not cutting).
+        let i = runs.partition_point(|run| run.0 < cut);
+        let smart = match i.checked_sub(1).map(|j| (j, runs[j])) {
+            Some((j, (a, b))) if b > cut => {
+                // Into the gap above the run: `padding` above it, or halfway into a
+                // narrower gap.
+                let above = if j > 0 {
+                    runs[j - 1].1
+                } else {
+                    f32::NEG_INFINITY
+                };
+                let shifted = (a - padding).max((above + a) * 0.5).min(a);
+                (shifted >= y + (1.0 - MAX_BREAK_SHIFT) * usable).then_some(shifted)
+            }
+            _ => None,
+        };
+        let cut = smart.unwrap_or(cut);
+        slices.push((y, cut));
+        y = cut;
+    }
 }
 
 /// Renders the document and writes it to `path`.
@@ -332,19 +464,26 @@ fn render_page(
 
     c.save_state();
     c.transform(world);
-    for note in notes.iter().filter(|n| n.rect().intersects(&area)) {
+    let shown = page.content.unwrap_or(area);
+    if page.content.is_some() {
+        // Ink crossing a page break is split there instead of repeating in the margin.
+        c.rect(shown.left, shown.top, shown.width(), shown.height());
+        c.clip_nonzero();
+        c.end_path();
+    }
+    for note in notes.iter().filter(|n| n.rect().intersects(&shown)) {
         draw_note(&mut c, note, font, states);
     }
     // Highlighters go beneath the regular ink.
     for r in renders
         .iter()
-        .filter(|r| r.tool == ToolType::Highlighter && r.bounds.intersects(&area))
+        .filter(|r| r.tool == ToolType::Highlighter && r.bounds.intersects(&shown))
     {
         draw_stroke(&mut c, r, states);
     }
     for r in renders
         .iter()
-        .filter(|r| r.tool != ToolType::Highlighter && r.bounds.intersects(&area))
+        .filter(|r| r.tool != ToolType::Highlighter && r.bounds.intersects(&shown))
     {
         draw_stroke(&mut c, r, states);
     }
@@ -886,13 +1025,146 @@ mod tests {
             .collect()
     }
 
+    fn rect(left: f32, top: f32, right: f32, bottom: f32) -> ViewportRect {
+        ViewportRect::new(left, top, right, bottom)
+    }
+
+    /// Usable page height (world units) at the natural scale.
+    fn usable_height() -> f32 {
+        (A4_HEIGHT_PT - 2.0 * WHITEBOARD_MARGIN_PT) / PT_PER_UNIT
+    }
+
     #[test]
-    fn layout_paginates_whiteboards_downwards() {
-        let l = PageLayout::compute(Some(ViewportRect::new(0.0, 0.0, 500.0, 2500.0)));
-        assert!((l.page_width * PT_PER_UNIT - A4_WIDTH_PT).abs() < 0.5);
-        assert_eq!(l.page_count, 3);
-        let wide = PageLayout::compute(Some(ViewportRect::new(0.0, 0.0, 30_000.0, 100.0)));
-        assert!(wide.page_width * wide.scale <= MAX_PAGE_PT + 0.5);
+    fn whiteboards_paginate_downwards_on_a4() {
+        let pages = whiteboard_pages(&[rect(0.0, 0.0, 500.0, 2500.0)]);
+        // One item taller than a page cannot be avoided: hard cuts every full page.
+        assert_eq!(pages.len(), 3);
+        for p in &pages {
+            let (w, h) = p.size_pt();
+            assert!(
+                (w - A4_WIDTH_PT).abs() < 0.01 && (h - A4_HEIGHT_PT).abs() < 0.01,
+                "{w}×{h}"
+            );
+            assert_eq!(
+                p.scale, PT_PER_UNIT,
+                "narrow boards keep the notebook scale"
+            );
+        }
+        // Content starts at the top-left margin, not at the canvas origin.
+        let first = pages[0].content.unwrap();
+        assert!((pages[0].area.left - (0.0 - WHITEBOARD_MARGIN_PT / PT_PER_UNIT)).abs() < 0.01);
+        assert!(first.top <= 0.0);
+        // Consecutive pages continue exactly where the previous one stopped.
+        for pair in pages.windows(2) {
+            assert_eq!(
+                pair[0].content.unwrap().bottom,
+                pair[1].content.unwrap().top
+            );
+        }
+        // An empty board still exports one A4 page.
+        let empty = whiteboard_pages(&[]);
+        assert_eq!(empty.len(), 1);
+        assert!((empty[0].size_pt().0 - A4_WIDTH_PT).abs() < 0.01);
+    }
+
+    #[test]
+    fn wide_whiteboards_are_scaled_to_the_page_width_instead_of_sliced() {
+        let items = [
+            rect(-200.0, 100.0, 2800.0, 300.0),
+            rect(1000.0, 400.0, 1200.0, 500.0),
+        ];
+        let pages = whiteboard_pages(&items);
+        assert_eq!(pages.len(), 1, "no horizontal slicing");
+        let p = &pages[0];
+        let usable_pt = A4_WIDTH_PT - 2.0 * WHITEBOARD_MARGIN_PT;
+        assert!((p.scale - usable_pt / 3000.0).abs() < 1e-6);
+        // Left and right content edges sit exactly on the 24 pt margins.
+        assert!(((-200.0 - p.area.left) * p.scale - WHITEBOARD_MARGIN_PT).abs() < 0.01);
+        assert!(((p.area.right - 2800.0) * p.scale - WHITEBOARD_MARGIN_PT).abs() < 0.01);
+        assert!((p.size_pt().0 - A4_WIDTH_PT).abs() < 0.01);
+    }
+
+    #[test]
+    fn smart_page_breaks_move_lines_of_writing_to_the_next_page() {
+        let usable = usable_height();
+        let padding = BREAK_PADDING_PT / PT_PER_UNIT;
+        // Lines of handwriting 60 units tall with 40-unit gaps; one of them straddles the
+        // natural end of page 1.
+        let lines: Vec<(f32, f32)> = (0..30)
+            .map(|i| (i as f32 * 100.0, i as f32 * 100.0 + 60.0))
+            .collect();
+        let natural = usable;
+        let straddling = lines
+            .iter()
+            .find(|(a, b)| *a < natural && *b > natural)
+            .copied()
+            .unwrap();
+        let slices = smart_page_breaks(&lines, 0.0, 2960.0, usable, padding);
+        let cut = slices[0].1;
+        assert!(cut < straddling.0, "the line moves to page 2 in one piece");
+        assert!(
+            (straddling.0 - cut - padding).abs() < 0.01,
+            "with the padding above it"
+        );
+        assert!(
+            cut > straddling.0 - 40.0,
+            "but still in the gap below the previous line"
+        );
+        // No page break cuts through any line.
+        for &(_, end) in &slices[..slices.len() - 1] {
+            assert!(
+                lines.iter().all(|&(a, b)| !(a < end && b > end)),
+                "cut at {end}"
+            );
+        }
+        // The slices cover everything, in order, none taller than a page.
+        assert_eq!(slices.first().unwrap().0, 0.0);
+        assert_eq!(slices.last().unwrap().1, 2960.0);
+        for s in &slices {
+            assert!(s.1 > s.0 && s.1 - s.0 <= usable + 0.01);
+        }
+    }
+
+    #[test]
+    fn smart_page_breaks_use_half_a_narrow_gap_and_never_give_up_more_than_35_percent() {
+        let usable = 1000.0;
+        // Gap of 6 units between two lines; padding 13 would reach into the upper line.
+        let tight = [(900.0, 990.0), (996.0, 1050.0)];
+        let slices = smart_page_breaks(&tight, 0.0, 1050.0, usable, 13.0);
+        assert_eq!(slices[0].1, 993.0, "halfway into the gap");
+
+        // A drawing spanning 40 % of the page across the cut: moving above it would waste
+        // too much paper, so it is cut where the page is full.
+        let tall = [(100.0, 200.0), (600.0, 1400.0)];
+        let slices = smart_page_breaks(&tall, 0.0, 1400.0, usable, 13.0);
+        assert_eq!(slices[0], (0.0, 1000.0));
+        // Giving up about 31 % of the page is still fine.
+        let ok = [(700.0, 1300.0)];
+        let slices = smart_page_breaks(&ok, 0.0, 1300.0, usable, 13.0);
+        assert_eq!(slices[0], (0.0, 687.0));
+
+        // Items that only touch the page end are not cut, and the break stays.
+        let touching = [(0.0, 1000.0), (1000.0, 1100.0)];
+        assert_eq!(
+            smart_page_breaks(&touching, 0.0, 1100.0, usable, 13.0)[0],
+            (0.0, 1000.0)
+        );
+    }
+
+    #[test]
+    fn whiteboard_pages_clip_ink_to_their_slice() {
+        let usable = usable_height();
+        let line = rect(10.0, usable - 30.0, 400.0, usable + 30.0);
+        let pages = whiteboard_pages(&[rect(10.0, 0.0, 400.0, 50.0), line]);
+        assert_eq!(pages.len(), 2);
+        let (p1, p2) = (pages[0].content.unwrap(), pages[1].content.unwrap());
+        assert!(p1.bottom <= line.top, "page 1 stops above the line");
+        assert!(
+            p2.top <= line.top && p2.bottom >= line.bottom,
+            "page 2 holds all of it"
+        );
+        // The page areas include the margins around the slice.
+        assert!(pages[1].area.top < p2.top);
     }
 
     #[test]
@@ -916,6 +1188,8 @@ mod tests {
         scribble(&mut e, ToolType::Pen, 100.0);
         e.append_page();
         e.append_page();
+        // Page 2 stays blank on purpose; page 3 is written on.
+        scribble(&mut e, ToolType::Pen, 2100.0);
         let data = e.data();
         let (bytes, pages) =
             render_document(&export_doc(&e, &data, PaperStyle::Matematica), None).unwrap();
@@ -923,14 +1197,73 @@ mod tests {
         let doc = assert_valid_pdf(&bytes);
         let ids: Vec<_> = doc.page_iter().collect();
         assert_eq!(ids.len(), 3);
+        assert_eq!(media_box(&doc, ids[1]), vec![0.0, 0.0, 750.0, 750.0]);
         assert_eq!(media_box(&doc, ids[2]), vec![0.0, 0.0, 750.0, 750.0]);
+    }
+
+    #[test]
+    fn blank_pages_at_the_end_of_a_notebook_are_not_exported() {
+        let pages_of = |e: &Engine| {
+            let data = e.data();
+            layout_pages(&export_doc(e, &data, e.paper()), &[], |_| None)
+                .iter()
+                .map(|p| p.area.top)
+                .collect::<Vec<_>>()
+        };
+        let mut e = Engine::with_kind(DocumentKind::Notebook, PaperStyle::Dictando);
+        scribble(&mut e, ToolType::Pen, 100.0);
+        e.append_page();
+        e.append_page();
+        e.append_page();
+        // Ink on page 1 only: the three pages added by scrolling are left out.
+        let data = e.data();
+        let renders: Vec<StrokeRender> = data.strokes.iter().map(Stroke::render).collect();
+        let pages = layout_pages(&export_doc(&e, &data, e.paper()), &renders, |_| None);
+        assert_eq!(pages.len(), 1);
+        assert_eq!(data.pages.len(), 4, "the document itself keeps its pages");
+
+        // A sticky note on page 3 keeps pages 1–3 (page 2 is a blank page in between).
+        e.create_note(100.0, 2200.0, 200.0, 150.0, 0xFFFFF59D, String::new());
+        let data = e.data();
+        let renders: Vec<StrokeRender> = data.strokes.iter().map(Stroke::render).collect();
+        let pages = layout_pages(&export_doc(&e, &data, e.paper()), &renders, |_| None);
+        assert_eq!(pages.len(), 3);
+
+        // A stroke whose edge only grazes the next page does not keep that page.
+        let mut graze = Engine::with_kind(DocumentKind::Notebook, PaperStyle::Dictando);
+        graze.append_page();
+        scribble(&mut graze, ToolType::Pen, 994.0);
+        let data = graze.data();
+        let renders: Vec<StrokeRender> = data.strokes.iter().map(Stroke::render).collect();
+        assert!(renders[0].bounds.bottom > 1000.0);
+        let pages = layout_pages(&export_doc(&graze, &data, graze.paper()), &renders, |_| {
+            None
+        });
+        assert_eq!(pages.len(), 1);
+
+        // An empty notebook still exports its first page.
+        let mut empty = Engine::with_kind(DocumentKind::Notebook, PaperStyle::Dictando);
+        empty.append_page();
+        empty.append_page();
+        assert_eq!(pages_of(&empty), vec![0.0]);
     }
 
     #[test]
     fn pdf_annotations_keep_the_original_pages_as_vectors() {
         let pdf = ImportedPdf::parse(sample_pdf()).unwrap();
+        // Untouched PDF pages are always exported; a blank page added after them is not.
+        let mut untouched = Engine::with_pdf(pdf.clone());
+        untouched.append_page();
+        let data = untouched.data();
+        let (_, pages) =
+            render_document(&export_doc(&untouched, &data, PaperStyle::Whiteboard), None).unwrap();
+        assert_eq!(pages.len(), 2);
+
         let mut e = Engine::with_pdf(pdf);
         scribble(&mut e, ToolType::Highlighter, 120.0);
+        let appended = e.append_page().unwrap();
+        // Written on, so the appended page is exported (with the previous page's scale).
+        scribble(&mut e, ToolType::Pen, appended.top + 200.0);
         e.append_page();
         let data = e.data();
         let (bytes, pages) =

@@ -216,6 +216,52 @@ class ScenePainter extends CustomPainter {
   bool shouldRepaint(covariant ScenePainter old) => old.controller != controller || old.viewport != viewport;
 }
 
+/// Whiteboards with "Show page guides" on: a dotted line where each PDF page of the export
+/// ends (smart page breaks included), across the width the pages cover, with the number of
+/// the page that starts below it. Drawn in screen space, so it stays thin at any zoom; it
+/// is never part of the document or the export.
+class PageGuidesPainter extends CustomPainter {
+  PageGuidesPainter(this.controller, this.viewport) : super(repaint: Listenable.merge([controller.pageGuides, viewport]));
+
+  final EditorController controller;
+  final Viewport viewport;
+
+  static const Color color = Color(0x995B8DEF);
+  static const double _dash = 3, _gap = 5;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final pages = controller.pageGuides.value;
+    if (pages.length < 2) return;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.2;
+    for (var i = 1; i < pages.length; i++) {
+      final page = pages[i];
+      final start = viewport.worldToScreen(Offset(page.left, page.top));
+      final end = viewport.worldToScreen(Offset(page.right, page.top));
+      if (start.dy < -20 || start.dy > size.height + 1) continue;
+      final from = math.max(0.0, start.dx), to = math.min(size.width, end.dx);
+      // Dashes stay put on the page while it scrolls sideways.
+      for (var x = from + ((start.dx - from) % (_dash + _gap)); x < to; x += _dash + _gap) {
+        canvas.drawLine(Offset(x, start.dy), Offset(math.min(x + _dash, to), start.dy), paint);
+      }
+      final label = TextPainter(
+        text: TextSpan(
+          text: 'Page ${i + 1}',
+          style: const TextStyle(fontSize: 11, color: color, fontFamily: 'NoteFont'),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      label.paint(canvas, Offset(from + 6, start.dy + 3));
+      label.dispose();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant PageGuidesPainter old) => old.controller != controller || old.viewport != viewport;
+}
+
 /// Renders the world rectangle [area] of the document at [scale] pixels per world unit:
 /// the page background plus the items in [only] (every item when `null`), without the
 /// on-screen decorations. Used for thumbnails and pinned snapshots.

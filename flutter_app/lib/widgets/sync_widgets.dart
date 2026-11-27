@@ -7,6 +7,7 @@ import '../src/sync/sync_service.dart';
 ({IconData icon, Color color, String label}) syncPhaseStyle(SyncPhase phase) => switch (phase) {
   SyncPhase.synced => (icon: Icons.cloud_done_outlined, color: const Color(0xFF81C995), label: 'Synced'),
   SyncPhase.syncing => (icon: Icons.sync, color: const Color(0xFF8AB4F8), label: 'Syncing…'),
+  SyncPhase.restoring => (icon: Icons.cloud_download_outlined, color: const Color(0xFF8AB4F8), label: 'Restoring…'),
   SyncPhase.pending => (icon: Icons.cloud_upload_outlined, color: Colors.white70, label: 'Pending'),
   SyncPhase.offline => (icon: Icons.cloud_off_outlined, color: const Color(0xFFFDD663), label: 'Offline'),
   SyncPhase.error => (icon: Icons.error_outline, color: const Color(0xFFF28B82), label: 'Sync error'),

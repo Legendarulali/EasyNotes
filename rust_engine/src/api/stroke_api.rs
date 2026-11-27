@@ -235,6 +235,13 @@ pub fn content_bounds() -> Option<ViewportRect> {
     engine().content_bounds()
 }
 
+/// Whiteboards: the part of the canvas each exported PDF page shows (world units, in
+/// page order), for the "Show page guides" lines. Empty for notebooks and PDFs.
+#[frb(sync)]
+pub fn whiteboard_page_guides() -> Vec<ViewportRect> {
+    engine().whiteboard_export_pages()
+}
+
 /// Paper geometry shared by the Flutter background painter and the PDF exporter.
 #[frb(sync)]
 pub fn paper_spec(style: PaperStyle) -> PaperSpec {
@@ -393,6 +400,13 @@ pub fn clear_selection() {
 #[frb(sync)]
 pub fn transform_selection(scale_x: f32, scale_y: f32, dx: f32, dy: f32) -> SceneDelta {
     engine().transform_selection(scale_x, scale_y, dx, dy)
+}
+
+/// Gives the selected strokes and shapes the ARGB `color` (sticky notes keep theirs).
+/// One undo step.
+#[frb(sync)]
+pub fn recolor_selection(color: u32) -> SceneDelta {
+    engine().recolor_selection(color)
 }
 
 /// Clones the selection with an offset and selects the clones.

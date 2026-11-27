@@ -46,7 +46,7 @@ pub const DUPLICATE_OFFSET: f32 = 24.0;
 const SELECTION_COVERAGE: f32 = 0.5;
 /// Content may poke this far below the last page (stroke thickness, rounding) before a
 /// new page is appended for it.
-const PAGE_COVER_TOLERANCE: f32 = 12.0;
+pub(crate) const PAGE_COVER_TOLERANCE: f32 = 12.0;
 
 /// Current selection: ids plus their combined bounding box.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1030,6 +1030,32 @@ impl Engine {
         self.finish_delta(delta)
     }
 
+    /// Gives every selected stroke and shape the ARGB `color` (sticky notes keep theirs;
+    /// opacity, width and tool stay). One undo step; no step when nothing changes.
+    pub fn recolor_selection(&mut self, color: u32) -> SceneDelta {
+        let keys: Vec<u64> = self
+            .selection
+            .iter()
+            .copied()
+            .filter(|k| self.strokes.get(k).is_some_and(|s| s.color != color))
+            .collect();
+        let mut delta = SceneDelta::default();
+        if keys.is_empty() {
+            return self.finish_delta(delta);
+        }
+        self.begin_edit();
+        for key in keys {
+            self.record(key);
+            if let Some(stroke) = self.strokes.get_mut(&key) {
+                stroke.color = color;
+                delta.upserted_strokes.push(stroke.render());
+            }
+        }
+        self.end_edit();
+        self.touch();
+        self.finish_delta(delta)
+    }
+
     fn selected_clip_items(&self) -> Vec<ClipItem> {
         self.selection
             .iter()
@@ -1164,6 +1190,25 @@ impl Engine {
             .reduce(|a, b| a.union(&b))
     }
 
+    /// Whiteboards: the part of the canvas each PDF page will show (world units), as the
+    /// exporter will paginate it, for page-boundary guides on the canvas. Empty for paged
+    /// documents.
+    pub fn whiteboard_export_pages(&self) -> Vec<ViewportRect> {
+        if self.kind.is_paged() {
+            return Vec::new();
+        }
+        let items: Vec<ViewportRect> = self
+            .strokes
+            .keys()
+            .chain(self.notes.keys())
+            .filter_map(|k| self.index.bounds_of(*k))
+            .collect();
+        crate::export::pdf_exporter::whiteboard_pages(&items)
+            .iter()
+            .map(|p| p.content.unwrap_or(p.area))
+            .collect()
+    }
+
     /// Z-ordered strokes (cloned) – used by the exporter outside the engine lock.
     pub fn strokes(&self) -> Vec<Stroke> {
         self.strokes.values().cloned().collect()
@@ -1230,6 +1275,79 @@ mod tests {
         assert_eq!(del.removed_ids.len(), 1);
         assert_eq!(e.item_count(), 2);
         assert!(del.selection.ids.is_empty());
+    }
+
+    #[test]
+    fn recoloring_the_selection_is_one_undo_step() {
+        let mut e = notebook();
+        let a = draw_line(&mut e, 10.0, 10.0, 100.0, 10.0);
+        let b = draw_line(&mut e, 10.0, 60.0, 100.0, 60.0);
+        let untouched = draw_line(&mut e, 10.0, 600.0, 100.0, 600.0);
+        let note = e.create_note(300.0, 10.0, 100.0, 100.0, 0xFFFFF59D, "n".into());
+        e.set_selection(&[a.id.clone(), b.id.clone(), note.id.clone()]);
+        let steps = e.history.undo_len();
+
+        let delta = e.recolor_selection(0xFFD32F2F);
+        assert_eq!(delta.upserted_strokes.len(), 2);
+        assert!(delta.upserted_strokes.iter().all(|r| r.color == 0xFFD32F2F));
+        assert!(
+            delta.upserted_notes.is_empty(),
+            "sticky notes keep their colour"
+        );
+        assert_eq!(delta.selection.ids.len(), 3, "the selection stays");
+        assert_eq!(e.history.undo_len(), steps + 1);
+        let colour =
+            |e: &Engine, id: &str| e.strokes().into_iter().find(|s| s.id == id).unwrap().color;
+        assert_eq!(colour(&e, &untouched.id), 0xFF000000);
+        assert_eq!(e.notes()[0].color, 0xFFFFF59D);
+        // Same ids and z-order: a recolour is not a delete + insert.
+        let ids: Vec<String> = e.strokes().into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec![a.id.clone(), b.id.clone(), untouched.id.clone()]);
+
+        // Choosing the colour they already have records nothing.
+        e.recolor_selection(0xFFD32F2F);
+        assert_eq!(e.history.undo_len(), steps + 1);
+
+        let undone = e.undo().unwrap();
+        assert_eq!(undone.upserted_strokes.len(), 2);
+        assert_eq!(colour(&e, &a.id), 0xFF000000);
+        assert_eq!(colour(&e, &b.id), 0xFF000000);
+        e.redo().unwrap();
+        assert_eq!(colour(&e, &a.id), 0xFFD32F2F);
+        assert_eq!(colour(&e, &b.id), 0xFFD32F2F);
+    }
+
+    #[test]
+    fn whiteboard_page_guides_match_the_export() {
+        let mut e = Engine::new();
+        assert_eq!(
+            e.whiteboard_export_pages().len(),
+            1,
+            "an empty board is one page"
+        );
+        for i in 0..30 {
+            let y = 20.0 + i as f32 * 100.0;
+            draw_line(&mut e, 10.0, y, 600.0, y + 1.0);
+        }
+        let guides = e.whiteboard_export_pages();
+        let data = e.data();
+        let renders: Vec<StrokeRender> = data.strokes.iter().map(Stroke::render).collect();
+        let doc = crate::export::ExportDocument {
+            kind: data.kind,
+            paper: data.paper,
+            pages: &data.pages,
+            strokes: &data.strokes,
+            notes: &data.notes,
+            pdf: None,
+        };
+        let exported = crate::export::pdf_exporter::layout_pages(&doc, &renders, |_| None);
+        assert_eq!(guides.len(), exported.len());
+        assert!(guides.len() > 1);
+        for (g, p) in guides.iter().zip(&exported) {
+            assert_eq!(Some(*g), p.content);
+        }
+        // Notebooks have real pages instead.
+        assert!(notebook().whiteboard_export_pages().is_empty());
     }
 
     #[test]

@@ -199,6 +199,11 @@ class EditorController extends ChangeNotifier {
   bool _hasClipboard = false;
   bool _canUndo = false;
   bool _canRedo = false;
+  bool _showPageGuides = false;
+
+  /// Whiteboards with [showPageGuides] on: the part of the canvas each exported PDF page
+  /// shows, in page order (empty otherwise). Updated after every edit.
+  final ValueNotifier<List<Rect>> pageGuides = ValueNotifier(const []);
 
   // ------------------------------------------------------------------ getters
 
@@ -236,6 +241,12 @@ class EditorController extends ChangeNotifier {
 
   /// The single selected sticky note, if the selection is exactly one note.
   StickyNote? get singleSelectedNote => _selectedIds.length == 1 ? scene.note(_selectedIds.first) : null;
+
+  /// The selected strokes and shapes (sticky notes left out).
+  List<StrokeRender> get selectedStrokes => [for (final id in _selectedIds) ?scene.stroke(id)?.render];
+
+  /// Dotted lines where the PDF pages of a whiteboard will end ([pageGuides]).
+  bool get showPageGuides => _showPageGuides;
 
   /// The view of [pane]: each pane of the split screen scrolls and zooms on its own, even
   /// when both show this notebook.
@@ -417,6 +428,7 @@ class EditorController extends ChangeNotifier {
     _autosave?.cancel();
     _autosave = Timer(autosaveDelay, save);
     _refreshHistory();
+    if (_showPageGuides) _refreshPageGuides();
   }
 
   void _refreshHistory() {
@@ -549,6 +561,23 @@ class EditorController extends ChangeNotifier {
   void setAutoCorrect(bool v) {
     _autoCorrect = v;
     notifyListeners();
+  }
+
+  /// Shows or hides the whiteboard's page-boundary guides (where the PDF export will
+  /// start each page). Has no effect on notebooks, which have real pages.
+  void setShowPageGuides(bool v) {
+    if (v == _showPageGuides) return;
+    _showPageGuides = v;
+    _refreshPageGuides();
+    notifyListeners();
+  }
+
+  void _refreshPageGuides() {
+    if (!_showPageGuides || isPaged || !_bind()) {
+      if (pageGuides.value.isNotEmpty) pageGuides.value = const [];
+      return;
+    }
+    pageGuides.value = [for (final r in engine.whiteboardPageGuides()) r.toRect()];
   }
 
   void setStylusOnly(bool v) {
@@ -706,6 +735,16 @@ class EditorController extends ChangeNotifier {
     if (hasSelection && _bind()) _applyDelta(engine.duplicateSelection());
   }
 
+  /// Gives the selected strokes and shapes [color] (one undo step; sticky notes keep
+  /// theirs). The selection stays, so another colour can be tried right away.
+  void recolorSelection(Color color) {
+    if (selectedStrokes.isNotEmpty && _bind()) _applyDelta(engine.recolorSelection(color: color.toARGB32()));
+  }
+
+  /// Sets the selection without asking the engine (widget tests).
+  @visibleForTesting
+  void debugSetSelection(List<String> ids) => _applySelection(SelectionInfo(ids: ids));
+
   void copySelection() {
     if (!_bind()) return;
     _hasClipboard = engine.copySelection() > 0;
@@ -784,6 +823,7 @@ class EditorController extends ChangeNotifier {
     live.dispose();
     selectionPreview.dispose();
     notePreview.dispose();
+    pageGuides.dispose();
     super.dispose();
   }
 }

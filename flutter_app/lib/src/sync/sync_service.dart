@@ -21,6 +21,9 @@ enum SyncPhase {
   pending,
   syncing,
 
+  /// Downloading the Drive backup into an empty library ([SyncService.restoreProgress]).
+  restoring,
+
   /// Everything on Drive matches the library.
   synced,
 
@@ -38,6 +41,11 @@ enum SyncPhase {
 /// * right after a notebook is closed ([syncNow]),
 /// * when the app is hidden or about to exit ([flush], which first lets open editors
 ///   save), and right after signing in.
+///
+/// Right after signing in (or at start when already signed in), an empty library (no
+/// notebooks, no folders: a new device or a reinstall) is first filled from the Drive
+/// backup ([SyncPhase.restoring]). A library that has anything in it is never
+/// overwritten; it is only backed up as usual.
 ///
 /// Runs never overlap: a request during a run schedules exactly one more run.
 class SyncService extends ChangeNotifier {
@@ -64,9 +72,25 @@ class SyncService extends ChangeNotifier {
   bool _disposed = false;
   final Map<Object, Future<void> Function()> _savers = {};
 
+  /// Check for an empty library to restore on the next run (after sign-in / start).
+  bool _restoreDue = false;
+  ({int done, int total})? _restoreProgress;
+  RestoreReport? _lastRestore;
+  int _libraryRevision = 0;
+
   GoogleAccount? get account => _account;
   SyncPhase get phase => _phase;
   bool get isSignedIn => _account != null;
+
+  /// Notebooks restored so far / to restore, while [phase] is [SyncPhase.restoring].
+  ({int done, int total})? get restoreProgress => _restoreProgress;
+
+  /// The last restore that brought notebooks or folders back.
+  RestoreReport? get lastRestore => _lastRestore;
+
+  /// Changes whenever this service added notebooks or folders to the library (a restore):
+  /// the library screen reloads.
+  int get libraryRevision => _libraryRevision;
 
   /// When the library last finished uploading.
   DateTime? get lastSynced => _lastSynced;
@@ -92,6 +116,7 @@ class SyncService extends ChangeNotifier {
       _set(SyncPhase.signedOut);
       return;
     }
+    _restoreDue = true;
     _set(SyncPhase.pending);
     _startTimer();
     unawaited(syncNow());
@@ -139,6 +164,7 @@ class SyncService extends ChangeNotifier {
     }
     if (account == null || _disposed) return false;
     _account = account;
+    _restoreDue = true;
     _set(SyncPhase.pending);
     _startTimer();
     unawaited(syncNow());
@@ -214,6 +240,11 @@ class SyncService extends ChangeNotifier {
     if (account == null) return;
     try {
       final engine = BackupEngine(library: library, remote: _remoteFactory(await auth.client()), account: account.email);
+      if (_restoreDue) {
+        // Stays due until it got through (offline: the next run tries again).
+        if (await library.isEmpty() || await engine.restoreInterrupted()) await _restore(engine);
+        _restoreDue = false;
+      }
       if (await engine.hasPendingChanges()) {
         _set(SyncPhase.syncing);
         final report = await engine.run();
@@ -237,6 +268,31 @@ class SyncService extends ChangeNotifier {
         debugPrint('Drive backup failed: $e');
         _set(SyncPhase.error, message: describeError(e));
       }
+    }
+  }
+
+  Future<void> _restore(BackupEngine engine) async {
+    _restoreProgress = (done: 0, total: 0);
+    _set(SyncPhase.restoring, message: 'Restoring notes from Google Drive…');
+    var finished = false;
+    try {
+      final report = await engine.restore(
+        onProgress: (done, total) {
+          if (_disposed) return;
+          _restoreProgress = (done: done, total: total);
+          notifyListeners();
+        },
+      );
+      finished = true;
+      debugPrint('Drive restore: $report');
+      if (report.restoredAnything) {
+        _lastRestore = report;
+        _libraryRevision++;
+      }
+    } finally {
+      _restoreProgress = null;
+      // A restore cut short may have brought some notebooks back already.
+      if (!finished) _libraryRevision++;
     }
   }
 

@@ -1,6 +1,6 @@
 [package]
 name = "rust_engine"
-version = "0.1.0"
+version = "1.0.1"
 edition = "2021"
 description = "EasyNotes core engine: stroke processing, shape recognition, spatial index, paging, PDF import/export"
 

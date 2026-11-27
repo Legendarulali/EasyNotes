@@ -8,6 +8,7 @@ import 'screens/home_screen.dart';
 import 'src/rust/api/stroke_api.dart' as engine;
 import 'src/rust/frb_generated.dart';
 import 'src/services/library_service.dart';
+import 'src/services/update_service.dart';
 import 'src/sync/google_auth.dart';
 import 'src/sync/sync_service.dart';
 
@@ -19,7 +20,10 @@ Future<void> main() async {
   final sync = SyncService(library: library, auth: GoogleAuth.forPlatform());
   // Restoring the Google session must never delay the first frame.
   unawaited(sync.start());
-  runApp(EasyNotesApp(library: library, sync: sync));
+  // Neither may the (daily, silent when offline) look for a newer release.
+  final updates = UpdateService(library: library);
+  unawaited(updates.check());
+  runApp(EasyNotesApp(library: library, sync: sync, updates: updates));
 }
 
 /// Hands the bundled Roboto font to the Rust PDF exporter so sticky-note text with
@@ -58,10 +62,13 @@ ThemeData buildEasyNotesTheme() {
 /// Root widget. Also pushes the library to Google Drive when the app goes to the
 /// background or is about to exit (open notebooks are saved first).
 class EasyNotesApp extends StatefulWidget {
-  const EasyNotesApp({super.key, required this.library, required this.sync});
+  const EasyNotesApp({super.key, required this.library, required this.sync, this.updates});
 
   final LibraryService library;
   final SyncService sync;
+
+  /// Announces newer releases on the home screen (none in tests).
+  final UpdateService? updates;
 
   @override
   State<EasyNotesApp> createState() => _EasyNotesAppState();
@@ -96,7 +103,7 @@ class _EasyNotesAppState extends State<EasyNotesApp> {
       debugShowCheckedModeBanner: false,
       theme: buildEasyNotesTheme(),
       themeMode: ThemeMode.dark,
-      home: HomeScreen(library: widget.library, sync: widget.sync),
+      home: HomeScreen(library: widget.library, sync: widget.sync, updates: widget.updates),
     );
   }
 }

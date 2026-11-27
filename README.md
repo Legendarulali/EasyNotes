@@ -61,6 +61,7 @@ easynotes/
   - The floating toolbar, the keyboard shortcuts and the tab bar work on the **focused** pane, the one last touched. It has a highlighted header and an outline; in the tab bar, the other pane's notebook is underlined more faintly.
   - Only one pane takes pen or touch input at a time, so a palm resting on the other pane is ignored while you write.
   - The × in the right pane's header closes the split; its notebook stays open as a tab.
+- **Recolour a selection.** The selection bar has a row of colour swatches (the highlighter colours when only highlighter ink is selected). A tap recolours every selected stroke and shape at once, in one undo step; sticky notes keep their colour.
 - **Pin to screen.** The **Pin** button in the selection bar turns the selected strokes and notes, on their page background, into a sharp floating card. It is rendered at up to 3× the screen resolution.
   - Cards stay fixed on screen while the pages scroll and while you switch tabs or panes, so a formula or diagram stays in view as you work further down.
   - Drag a card by its header and resize it from its bottom-right corner (it keeps its aspect ratio). The header's drop button switches between 100 % and 75 % opacity, and × unpins.
@@ -79,6 +80,10 @@ easynotes/
 - **PDF annotation.** Imported PDFs become one page per PDF page: 1000 units wide, keeping the PDF page's aspect ratio.
   - PDFium (via `pdfrx`) renders each page as the background layer at a resolution that follows the zoom.
   - Exporting re-embeds the original pages as **vector Form XObjects** under the annotations, so text stays selectable and nothing is rasterised. MediaBox/CropBox/Rotate inheritance is handled.
+- **PDF export.** Notebooks export one page per page, without the empty pages at the end (no ink, notes or imported PDF page). Blank pages in between and page 1 always stay.
+  - Whiteboards are scaled so their content fits the width of an A4 page (24 pt margins, never cut sideways) and continue on further A4 pages downwards.
+  - **Smart page breaks:** when a page break would cut through a line of writing or a drawing, the break moves up into the gap above it (10 pt of padding), as long as that costs at most 35 % of the page. Taller items are cut as before. Only the export changes: the board's coordinates stay as they are.
+  - *Show page guides* (whiteboard ⋮ menu, or the export dialog) draws dotted lines where the exported pages will break.
 - **Instant shape snap** (the magic-wand auto-correct toggle in the top bar, **off** whenever a notebook opens). Once switched on, Rust replaces strokes that look like a shape with clean geometry on pen-up:
   - **Straight line**: an open stroke at least 48 units long whose samples all stay within 4.5 % of its length from the start–end chord. Lines within 5° of horizontal / vertical become exact.
   - **Circle / ellipse**: the loop's area moments define the ellipse; every sample must lie close to it, the traced length must match its perimeter and there must be no sharp corner. Aspect ratios within 15 % of 1:1 make a circle.
@@ -119,8 +124,10 @@ easynotes/
     - before a desktop window closes (bounded to 15 s, after open notebooks save).
   - Uploads are incremental. With no local changes, a run makes no network requests. Changed files are MD5-compared before uploading, renames and moves become Drive moves, and deletes go to the Drive trash (recoverable for 30 days).
   - An interrupted run resumes where it stopped. After a reinstall, the existing backup is adopted instead of duplicated.
+  - **Automatic restore.** Signing in (or starting signed in) with an empty library (no notebooks, no folders: a new device or a reinstall) first downloads the whole backup, with *Restoring notes from Google Drive…* above the library. Nothing is blocked meanwhile. A library that has anything in it is never overwritten, only backed up. Each notebook appears once all its files are down, an interrupted restore continues on the next run, notebooks deleted on this device are not brought back, and the restored files count as backed up (no re-upload). Backups in a Drive folder named `EasyNotes` or `flutter_app` without the app's tag are found too.
   - Scope is `drive.file`: the app can only see files it created, nothing else in your Drive.
   - The backup mirrors the library's folder structure, so a notebook can be restored by downloading its `Name.enote` folder into `Documents/EasyNotes`.
+- **Update check.** At start, at most once a day, the app asks GitHub's public API for the latest release (no personal data, a generic client name; silent when offline). A newer version shows a dismissible banner in the library with a link to the release. On Windows the banner also asks you to back up to Google Drive before replacing the app folder, with *Sync now* when signed in. The notebooks live in `Documents\EasyNotes`, outside the app folder, so this is a precaution.
 - Unchanged from the first version: pen, pencil, highlighter (multiply blend beneath ink), sticky notes, lasso and box selection with resize handles, and cut/copy/duplicate/paste/delete.
 
 ## Design notes
@@ -146,7 +153,7 @@ easynotes/
   - `background.pdf`, `meta.json` and `thumb.png`.
 
   Folders are plain directories under `Documents/EasyNotes`. Saves are debounced 2 s after the last edit; switching or closing a tab, going Home, backgrounding the app or Ctrl+S save immediately. A revision counter in the engine tracks what is dirty.
-- **Export page sizes.** Notebook pages export as 750 × 750 pt (1 unit = 0.75 pt, so the 5 mm grid stays 5 mm on paper). PDF-backed pages keep the source size, and blank pages appended after them reuse that scale. Whiteboards are cut into A-series pages covering the content.
+- **Export page sizes.** Notebook pages export as 750 × 750 pt (1 unit = 0.75 pt, so the 5 mm grid stays 5 mm on paper). PDF-backed pages keep the source size, and blank pages appended after them reuse that scale. Whiteboards are scaled to the width of A4 portrait pages and paginated downwards with smart page breaks (`export/pdf_exporter.rs`, `whiteboard_pages`).
 
 ## Input model
 

@@ -154,14 +154,8 @@ impl PageStack {
     /// pages were removed.
     pub fn trim_trailing_blank(&mut self, content_bottom: f32, min_len: usize) -> usize {
         let before = self.pages.len();
-        while self.pages.len() > min_len.max(1) {
-            match self.pages.last() {
-                Some(p) if p.pdf_page.is_none() && p.top >= content_bottom => {
-                    self.pages.pop();
-                }
-                _ => break,
-            }
-        }
+        self.pages
+            .truncate(without_trailing_blank(&self.pages, content_bottom, min_len));
         before - self.pages.len()
     }
 
@@ -191,6 +185,19 @@ impl PageStack {
         let max_y = self.total_height() + PAGE_HEIGHT;
         (x.clamp(0.0, PAGE_WIDTH), y.clamp(0.0, max_y))
     }
+}
+
+/// How many of `pages` remain once the blank pages at the end are dropped: pages without
+/// a PDF background that start at or below `content_bottom` (nothing on them). Blank
+/// pages between written ones stay, and at least `min_len` (≥ 1) pages are kept.
+pub fn without_trailing_blank(pages: &[CanvasPage], content_bottom: f32, min_len: usize) -> usize {
+    let min_len = min_len.max(1).min(pages.len());
+    let mut len = pages.len();
+    while len > min_len && pages[len - 1].pdf_page.is_none() && pages[len - 1].top >= content_bottom
+    {
+        len -= 1;
+    }
+    len
 }
 
 /// World height of an imported PDF page scaled to the 1000-unit page width.

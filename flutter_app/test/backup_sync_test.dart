@@ -89,8 +89,19 @@ class FakeDrive implements DriveRemote {
     return [
       for (final n in _alive)
         if (n.parents.contains(folderId))
-          RemoteEntry(n.id, n.name, md5: n.bytes == null ? null : md5.convert(n.bytes!).toString()),
+          RemoteEntry(n.id, n.name, md5: n.bytes == null ? null : md5.convert(n.bytes!).toString(), isFolder: n.folder),
     ];
+  }
+
+  int downloads = 0;
+
+  @override
+  Future<Uint8List> download(String fileId) async {
+    _call();
+    downloads++;
+    final n = nodes[fileId];
+    if (n == null || _trashed(n) || n.folder) throw RemoteNotFoundException(fileId);
+    return Uint8List.fromList(n.bytes ?? Uint8List(0));
   }
 
   @override
@@ -336,7 +347,8 @@ void main() {
       for (final n in ['A', 'B', 'C']) {
         await _notebook(lib, tmp, n);
       }
-      drive.offlineAfterCalls = 6;
+      // After the root lookups (tag, then the folder names) and a few uploads.
+      drive.offlineAfterCalls = 8;
       await expectLater(engine().run(), throwsA(isA<SocketException>()));
       final partial = drive.uploads;
       expect(partial, greaterThan(0));
@@ -366,6 +378,124 @@ void main() {
       final read2 = await lib.readNotebook(nb.dir);
       expect(read1.meta.id, hasLength(32));
       expect(read2.meta.id, read1.meta.id, reason: 'assigned once and persisted');
+    });
+  });
+
+  group('Restore from Google Drive', () {
+    Directory? otherDir;
+    late LibraryService other;
+
+    /// Backs up a library on "another device" into [drive]: School/Algebra, Board,
+    /// and an empty folder.
+    Future<void> backupElsewhere() async {
+      final dir = otherDir = await Directory.systemTemp.createTemp('easynotes_other');
+      other = LibraryService(dir);
+      final school = await other.createFolder(dir, 'Școală');
+      final algebra = await _notebook(other, school.dir, 'Algebră', content: 'x²');
+      await algebra.thumbnailFile.writeAsString('png');
+      await _notebook(other, dir, 'Board', content: 'board ink');
+      await other.createFolder(dir, 'Empty');
+      await BackupEngine(library: other, remote: drive, account: 'ana@example.com').run();
+    }
+
+    tearDown(() async {
+      final dir = otherDir;
+      otherDir = null;
+      if (dir != null && await dir.exists()) await dir.delete(recursive: true);
+    });
+
+    test('an empty library gets every folder and notebook back; the next run uploads nothing', () async {
+      await backupElsewhere();
+      expect(await lib.isEmpty(), isTrue);
+      final progress = <(int, int)>[];
+      final report = await engine().restore(onProgress: (done, total) => progress.add((done, total)));
+
+      expect(report.restoredNotebooks, 2);
+      expect(report.restoredFolders, 2);
+      expect(progress.first, (0, 2));
+      expect(progress.last, (2, 2));
+      final algebra = File('${tmp.path}/Școală/Algebră.enote/content.ezn');
+      expect(await algebra.readAsString(), 'x²');
+      expect(await File('${tmp.path}/Școală/Algebră.enote/thumb.png').readAsString(), 'png');
+      expect(await File('${tmp.path}/Board.enote/content.ezn').readAsString(), 'board ink');
+      expect(Directory('${tmp.path}/Empty').existsSync(), isTrue);
+      final listed = (await lib.list(tmp)).map((e) => e.name).toList();
+      expect(listed, ['Empty', 'Școală', 'Board']);
+      // Same notebook ids as on the other device: the backup recognises them.
+      final original = await other.readNotebook(Directory('${otherDir!.path}/Board.enote'));
+      expect((await lib.readNotebook(Directory('${tmp.path}/Board.enote'))).meta.id, original.meta.id);
+      // No staging folder or marker is left behind.
+      expect(Directory('${tmp.path}/.restoring').existsSync(), isFalse);
+      expect(await engine().restoreInterrupted(), isFalse);
+
+      final calls = drive.calls, uploads = drive.uploads;
+      expect(await engine().hasPendingChanges(), isFalse, reason: 'restored files count as backed up');
+      await engine().run();
+      expect(drive.calls, calls, reason: 'nothing to do, no network');
+      expect(drive.uploads, uploads);
+    });
+
+    test('nothing local is overwritten, and notebooks deleted here are not brought back', () async {
+      await backupElsewhere();
+      // A notebook made here meanwhile, with the same name as one in the backup.
+      final mine = await _notebook(lib, tmp, 'Board', content: 'mine');
+      await engine().restore();
+      expect(await mine.documentFile.readAsString(), 'mine');
+      expect(await File('${tmp.path}/Board (2).enote/content.ezn').readAsString(), 'board ink');
+
+      // Delete a restored notebook before the backup caught up: a second restore (e.g.
+      // the library became empty again) does not resurrect it.
+      final restored = await lib.readNotebook(Directory('${tmp.path}/Board (2).enote'));
+      await lib.delete(restored);
+      final again = await engine().restore();
+      expect(again.restoredNotebooks, 0);
+      expect(Directory('${tmp.path}/Board (2).enote').existsSync(), isFalse);
+      // The next backup run moves its Drive copy to the trash, as for any delete.
+      final r = await engine().run();
+      expect(r.removedNotebooks, 1);
+    });
+
+    test('an interrupted restore leaves no half notebook and continues next time', () async {
+      await backupElsewhere();
+      drive.offlineAfterCalls = drive.calls + 9;
+      await expectLater(engine().restore(), throwsA(isA<SocketException>()));
+      expect(await engine().restoreInterrupted(), isTrue);
+      for (final nb in (await lib.allFolders()).expand((f) => f.listSync().whereType<Directory>())) {
+        if (!nb.path.endsWith(kNotebookExtension)) continue;
+        expect(File('${nb.path}/meta.json').existsSync(), isTrue, reason: '${nb.path} is complete');
+        expect(File('${nb.path}/content.ezn').existsSync(), isTrue, reason: '${nb.path} is complete');
+      }
+
+      drive.offlineAfterCalls = null;
+      await engine().restore();
+      expect(await engine().restoreInterrupted(), isFalse);
+      expect(await File('${tmp.path}/Școală/Algebră.enote/content.ezn').readAsString(), 'x²');
+      expect(await File('${tmp.path}/Board.enote/content.ezn').readAsString(), 'board ink');
+      expect(Directory(tmp.path).listSync().whereType<Directory>().where((d) => d.path.contains('(2)')), isEmpty);
+    });
+
+    test('a backup folder without the app tag (older builds, also named flutter_app) is found', () async {
+      final legacy = await drive.createFolder('flutter_app', 'root');
+      final nb = await drive.createFolder('Old.enote', legacy, properties: {'easynotesId': 'old-id'});
+      await drive.upload(name: 'content.ezn', parentId: nb, bytes: Uint8List.fromList(utf8.encode('old ink')), mimeType: 'x');
+      final report = await engine().restore();
+      expect(report.restoredNotebooks, 1);
+      expect(await File('${tmp.path}/Old.enote/content.ezn').readAsString(), 'old ink');
+      // Backups continue in that folder instead of starting a second one.
+      await _notebook(lib, tmp, 'New');
+      await engine().run();
+      expect(drive.files.keys, contains('flutter_app/New.enote/content.ezn'));
+      expect(drive.folders.where((f) => f == 'EasyNotes'), isEmpty);
+    });
+
+    test('names that are not valid file names are skipped', () async {
+      final root = await drive.createRoot('EasyNotes');
+      await drive.createFolder('../escape.enote', root);
+      await drive.createFolder('.hidden', root);
+      final report = await engine().restore();
+      expect(report.restoredNotebooks + report.restoredFolders, 0);
+      expect(report.skippedNotebooks, 2);
+      expect(Directory(tmp.parent.path).listSync().where((e) => e.path.endsWith('escape.enote')), isEmpty);
     });
   });
 
@@ -570,6 +700,78 @@ void main() {
       s.addListener(check);
       await done.future.timeout(const Duration(seconds: 5));
       s.dispose();
+    });
+
+    /// A backup of one notebook "Remote" made by another device.
+    Future<Directory> backupFromAnotherDevice() async {
+      final dir = await Directory.systemTemp.createTemp('easynotes_device2');
+      final other = LibraryService(dir);
+      await _notebook(other, dir, 'Remote', content: 'from drive');
+      await BackupEngine(library: other, remote: drive, account: 'ana@example.com').run();
+      return dir;
+    }
+
+    test('signing in with an empty library restores the Drive backup, then backs up as usual', () async {
+      final device2 = await backupFromAnotherDevice();
+      final s = service();
+      await s.start();
+      final phases = <SyncPhase>[];
+      final progress = <({int done, int total})>[];
+      s.addListener(() {
+        phases.add(s.phase);
+        if (s.restoreProgress case final p?) progress.add(p);
+      });
+      expect(await s.signIn(), isTrue);
+      await s.syncNow();
+      expect(phases, contains(SyncPhase.restoring));
+      expect(progress.last, (done: 1, total: 1));
+      expect(s.restoreProgress, isNull);
+      expect(s.phase, SyncPhase.synced);
+      expect(await File('${tmp.path}/Remote.enote/content.ezn').readAsString(), 'from drive');
+      expect(s.lastRestore?.restoredNotebooks, 1);
+      expect(s.libraryRevision, greaterThan(0), reason: 'the library screen reloads');
+      s.dispose();
+      await device2.delete(recursive: true);
+    });
+
+    test('a library that has notes is never replaced: only the usual backup runs', () async {
+      final device2 = await backupFromAnotherDevice();
+      await _notebook(lib, tmp, 'Mine', content: 'local');
+      auth = FakeAuth(stored: FakeAuth.account);
+      final s = service();
+      await s.start();
+      await s.syncNow();
+      expect(s.phase, SyncPhase.synced);
+      expect(Directory('${tmp.path}/Remote.enote').existsSync(), isFalse);
+      expect(await File('${tmp.path}/Mine.enote/content.ezn').readAsString(), 'local');
+      expect(drive.files['EasyNotes/Mine.enote/content.ezn'], 'local');
+      expect(drive.files['EasyNotes/Remote.enote/content.ezn'], 'from drive', reason: 'the other backup stays');
+      expect(s.lastRestore, isNull);
+      s.dispose();
+      await device2.delete(recursive: true);
+    });
+
+    test('already signed in at start: offline first, the restore happens once the connection is back', () async {
+      final device2 = await backupFromAnotherDevice();
+      auth = FakeAuth(stored: FakeAuth.account);
+      drive.offlineAfterCalls = drive.calls;
+      final s = service();
+      await s.start();
+      await s.syncNow();
+      expect(s.phase, SyncPhase.offline);
+      expect(await lib.isEmpty(), isTrue);
+
+      drive.offlineAfterCalls = null;
+      await s.syncNow();
+      expect(s.phase, SyncPhase.synced);
+      expect(await File('${tmp.path}/Remote.enote/content.ezn').readAsString(), 'from drive');
+      // Done once: later runs only back up.
+      final downloads = drive.downloads;
+      await lib.delete(await lib.readNotebook(Directory('${tmp.path}/Remote.enote')));
+      await s.syncNow();
+      expect(drive.downloads, downloads, reason: 'deleting everything later does not restore it again');
+      s.dispose();
+      await device2.delete(recursive: true);
     });
 
     test('signing out stops the backup', () async {

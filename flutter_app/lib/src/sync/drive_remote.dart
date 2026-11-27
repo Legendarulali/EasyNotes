@@ -6,12 +6,13 @@ import 'package:http/http.dart' as http;
 
 /// A file or folder in the backup.
 class RemoteEntry {
-  const RemoteEntry(this.id, this.name, {this.md5});
+  const RemoteEntry(this.id, this.name, {this.md5, this.isFolder = false});
   final String id;
   final String name;
 
   /// MD5 of the content (files only).
   final String? md5;
+  final bool isFolder;
 }
 
 /// The remote item does not exist (deleted permanently or never created).
@@ -62,6 +63,10 @@ abstract interface class DriveRemote {
 
   /// Moves [id] to the Drive trash (recoverable there for 30 days).
   Future<void> trash(String id);
+
+  /// Content of the file [fileId] (restoring the backup). Throws
+  /// [RemoteNotFoundException] if it no longer exists.
+  Future<Uint8List> download(String fileId);
 }
 
 /// [DriveRemote] backed by the Drive API v3, with the `drive.file` scope: the app only
@@ -134,10 +139,12 @@ class GoogleDriveRemote implements DriveRemote {
         spaces: 'drive',
         pageSize: 100,
         pageToken: page,
-        $fields: 'nextPageToken, files(id, name, md5Checksum)',
+        $fields: 'nextPageToken, files(id, name, md5Checksum, mimeType)',
       );
       for (final f in list.files ?? const <drive.File>[]) {
-        if (f.id != null && f.name != null) out.add(RemoteEntry(f.id!, f.name!, md5: f.md5Checksum));
+        if (f.id != null && f.name != null) {
+          out.add(RemoteEntry(f.id!, f.name!, md5: f.md5Checksum, isFolder: f.mimeType == folderMime));
+        }
       }
       page = list.nextPageToken;
     } while (page != null);
@@ -198,6 +205,16 @@ class GoogleDriveRemote implements DriveRemote {
   @override
   Future<void> trash(String id) => _guard(() async {
     await _api.files.update(drive.File(trashed: true), id, $fields: 'id');
+  });
+
+  @override
+  Future<Uint8List> download(String fileId) => _guard(() async {
+    final media = await _api.files.get(fileId, downloadOptions: drive.DownloadOptions.fullMedia) as drive.Media;
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in media.stream) {
+      bytes.add(chunk);
+    }
+    return bytes.takeBytes();
   });
 
   Future<String> _create(drive.File f) => _guard(() async {

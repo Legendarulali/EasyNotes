@@ -385,8 +385,12 @@ class _MemoryDrive implements DriveRemote {
 
   @override
   Future<List<RemoteEntry>> listChildren(String folderId) async => [
-    for (final e in _in(folderId)) RemoteEntry(e.key, e.value.name, md5: e.value.md5),
+    for (final e in _in(folderId)) RemoteEntry(e.key, e.value.name, md5: e.value.md5, isFolder: e.value.folder),
   ];
+
+  /// Contents are not kept.
+  @override
+  Future<Uint8List> download(String fileId) async => throw RemoteNotFoundException(fileId);
 
   @override
   Future<bool> isAlive(String id) async => _nodes.containsKey(id);

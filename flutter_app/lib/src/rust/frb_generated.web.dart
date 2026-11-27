@@ -123,6 +123,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<StrokeRender> dco_decode_list_stroke_render(dynamic raw);
 
   @protected
+  List<ViewportRect> dco_decode_list_viewport_rect(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -295,6 +298,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<StrokeRender> sse_decode_list_stroke_render(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ViewportRect> sse_decode_list_viewport_rect(
     SseDeserializer deserializer,
   );
 
@@ -523,6 +531,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_stroke_render(
     List<StrokeRender> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_viewport_rect(
+    List<ViewportRect> self,
     SseSerializer serializer,
   );
 

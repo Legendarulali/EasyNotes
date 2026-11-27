@@ -120,6 +120,11 @@ SceneSnapshot getScene() => RustLib.instance.api.crateApiStrokeApiGetScene();
 ViewportRect? contentBounds() =>
     RustLib.instance.api.crateApiStrokeApiContentBounds();
 
+/// Whiteboards: the part of the canvas each exported PDF page shows (world units, in
+/// page order), for the "Show page guides" lines. Empty for notebooks and PDFs.
+List<ViewportRect> whiteboardPageGuides() =>
+    RustLib.instance.api.crateApiStrokeApiWhiteboardPageGuides();
+
 /// Paper geometry shared by the Flutter background painter and the PDF exporter.
 PaperSpec paperSpec({required PaperStyle style}) =>
     RustLib.instance.api.crateApiStrokeApiPaperSpec(style: style);
@@ -247,6 +252,11 @@ SceneDelta transformSelection({
   dx: dx,
   dy: dy,
 );
+
+/// Gives the selected strokes and shapes the ARGB `color` (sticky notes keep theirs).
+/// One undo step.
+SceneDelta recolorSelection({required int color}) =>
+    RustLib.instance.api.crateApiStrokeApiRecolorSelection(color: color);
 
 /// Clones the selection with an offset and selects the clones.
 SceneDelta duplicateSelection() =>

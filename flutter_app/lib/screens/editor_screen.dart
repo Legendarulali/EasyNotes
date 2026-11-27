@@ -254,7 +254,62 @@ class _EditorScreenState extends State<EditorScreen> {
     if (ok == true) c.clearPage();
   }
 
+  /// Whiteboards: explains how the board becomes pages (and offers the page guides) before
+  /// exporting. `false` if cancelled.
+  Future<bool> _confirmWhiteboardExport(EditorController c) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          icon: const Icon(Icons.picture_as_pdf_outlined),
+          title: const Text('Export whiteboard as PDF'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('The whole board is scaled to the width of an A4 page and split into pages from top to bottom.'),
+                const SizedBox(height: 12),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.auto_awesome_outlined, size: 18, color: Colors.white70),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Smart page breaks: a page ends in the gap above a line of writing instead of '
+                        'cutting through it, so that line starts the next page in one piece. Your board '
+                        'itself does not change.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Show page guides'),
+                  subtitle: const Text('Dotted lines on the board where each page ends'),
+                  value: c.showPageGuides,
+                  onChanged: (v) => setDialogState(() => c.setShowPageGuides(v)),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Export')),
+          ],
+        ),
+      ),
+    );
+    return ok == true;
+  }
+
   Future<void> _export(EditorController c) async {
+    if (!c.isPaged && !await _confirmWhiteboardExport(c)) return;
+    if (!mounted) return;
     setState(() => _exporting = true);
     try {
       final path = await nextExportPath(baseName: c.title);
